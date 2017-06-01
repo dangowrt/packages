@@ -1,0 +1,86 @@
+#!/bin/sh /etc/rc.common
+
+START=90
+USE_PROCD=1
+
+missing() {
+	echo "Not starting tunneldigger - missing $1" >&2
+}
+
+start_service() {
+	. $IPKG_INSTROOT/lib/functions/network.sh
+	local tunnel_id=1
+	config_cb() {
+		local cfg="$CONFIG_SECTION"
+		local configname enabled address uuid interface limit_bw_down
+		local hook_script bind_interface _bind_interface
+		config_get configname "$cfg" TYPE
+		case "$configname" in
+			broker)
+				config_get_bool enabled "$cfg" enabled 1
+				config_get addresses "$cfg" address
+				config_get uuid "$cfg" uuid
+				config_get interface "$cfg" interface
+				config_get limit_bw_down "$cfg" limit_bw_down
+				config_get hook_script "$cfg" hook_script
+				config_get bind_interface "$cfg" bind_interface
+
+				[ $enabled -eq 0 ] && return
+
+				if [ -z "$uuid" ]; then
+					missing uuid
+					return
+				elif [ -z "$interface" ]; then
+					missing interface
+					return
+				fi
+
+				echo "Starting tunneldigger on ${interface}"
+				procd_open_instance
+				procd_set_param command /usr/bin/tunneldigger
+				procd_append_param command -u ${uuid}
+				procd_append_param command -i ${interface}
+				procd_append_param command -t ${tunnel_id}
+
+				for address in $addresses; do
+					procd_append_param command "-b ${address}"
+				done
+
+				[ ! -z "${limit_bw_down}" ] && procd_append_param command "-L ${limit_bw_down}"
+				[ ! -z "${hook_script}" ] && procd_append_param command "-s ${hook_script}"
+				[ ! -z "${bind_interface}" ] && {
+					# Resolve logical interface name.
+					unset _bind_interface
+					network_get_device _bind_interface "${bind_interface}" || _bind_interface="${bind_interface}"
+					procd_append_param command "-I ${_bind_interface}"
+				}
+
+				procd_close_instance
+
+				let tunnel_id++
+			;;
+		esac
+	}
+	config_load tunneldigger
+}
+
+service_trigger() {
+	. $IPKG_INSTROOT/lib/functions/network.sh
+	config_cb() {
+		local cfg="$CONFIG_SECTION"
+		config_get configname "$cfg" TYPE
+		case "$configname" in
+			broker)
+				config_get_bool enabled "$cfg" enabled 1
+				config_get bind_interface "$cfg" bind_interface
+				[ $enabled -eq 0 -o -z "$bind_interface" ] && return
+
+				procd_add_reload_interface_trigger $bind_interface
+			;;
+		esac
+	}
+
+	procd_add_reload_trigger "tunneldigger"
+	procd_add_reload_interface_trigger $listen_interface
+	config_load tunneldigger
+}
