@@ -85,8 +85,24 @@ if (!(cmd in keys(backend))) {
 	return 22;
 }
 
+let meta_init = function() {
+	let sz = backend.size(".meta");
+	if (type(sz) != "string" || +sz <= 0) {
+		let metasz = +backend.total() / 10240;
+		if (metasz < 4194304)
+			metasz = 4194304;
+		if (metasz > +backend.free())
+			return;
+		if (backend.create(".meta", sprintf("%d", metasz), "rw") != 0)
+			return;
+	}
+	backend.up(".meta");
+	fs.mkdir("/tmp/run/uvol/.meta/apk", 0755);
+};
+
 if (cmd == "boot") {
 	backend.boot();
+	meta_init();
 	exit(0);
 }
 
