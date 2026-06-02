@@ -34,11 +34,9 @@ let cursor = uci ? uci.cursor() : null;
 let ctx = {};
 ctx.cursor = cursor;
 ctx.fs = fs;
-include("/usr/lib/uvol/uci.uc");
-ctx.uci_add = uvol_uci.uvol_uci_add;
-ctx.uci_remove = uvol_uci.uvol_uci_remove;
-ctx.uci_commit = uvol_uci.uvol_uci_commit;
-ctx.uci_init = uvol_uci.uvol_uci_init;
+include("/usr/lib/uvol/mount.uc");
+ctx.register = uvol_mount.register;
+ctx.unregister = uvol_mount.unregister;
 
 let backend = null;
 let tried_backends = [];
@@ -85,6 +83,11 @@ if (!cmd || cmd == "-h" || cmd == "help") {
 if (!(cmd in keys(backend))) {
 	printf("command %s not found\n", cmd);
 	return 22;
+}
+
+if (cmd == "boot") {
+	backend.boot();
+	exit(0);
 }
 
 let json_output = false;

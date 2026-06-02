@@ -27,7 +27,7 @@ define Package/uvol
   CATEGORY:=Utilities
   SUBMENU:=Disc
   TITLE:=OpenWrt UBI/LVM volume abstraction
-  DEPENDS:=+blockd +ucode +ucode-mod-fs +ucode-mod-math +ucode-mod-uci
+  DEPENDS:=+blockd +ucode +ucode-mod-fs +ucode-mod-math +ucode-mod-uci +ucode-mod-ubus
   PKGARCH=all
 endef
 
@@ -70,7 +70,7 @@ define Package/uvol/install
 	$(INSTALL_DIR) $(1)/etc/init.d $(1)/usr/lib/uvol/backends $(1)/usr/sbin $(1)/etc/uci-defaults
 	$(INSTALL_BIN) ./files/uvol.init $(1)/etc/init.d/uvol
 	$(INSTALL_DATA) ./files/blockdev_common.uc $(1)/usr/lib/uvol/
-	$(INSTALL_DATA) ./files/uci.uc $(1)/usr/lib/uvol/
+	$(INSTALL_DATA) ./files/mount.uc $(1)/usr/lib/uvol/
 	$(INSTALL_DATA) ./files/lvm.uc $(1)/usr/lib/uvol/backends/
 	$(INSTALL_DATA) ./files/ubi.uc $(1)/usr/lib/uvol/backends/
 	$(INSTALL_BIN) ./files/uvol $(1)/usr/sbin

@@ -41,8 +41,8 @@ function lvm(cmd, ...args) {
 }
 
 function pvs() {
-	let fstab = cursor.get_all('fstab');
-	for (let k, section in fstab) {
+	let fstab = cursor ? cursor.get_all('fstab') : null;
+	for (let k, section in (fstab ?? {})) {
 		if (section['.type'] != 'uvol' || !section.vg_name)
 			continue;
 
@@ -123,10 +123,8 @@ function lvm_init(ctx) {
 		return false;
 
 	vg = vgs(vg_name);
-	uvol_uci_add = ctx.uci_add;
-	uvol_uci_commit = ctx.uci_commit;
-	uvol_uci_remove = ctx.uci_remove;
-	uvol_uci_init = ctx.uci_init;
+	register = ctx.register;
+	unregister = ctx.unregister;
 	return true;
 }
 
@@ -235,27 +233,28 @@ function lvm_updown(vol_name, up) {
 		   wildcard(lv.lv_path, "/dev/*/wp_*")))
 		return 22;
 
-	if (up)
-		uvol_uci_commit(vol_name);
-
-	if (lv.lv_active == up)
-		return 0;
-
 	if (!up) {
 		let devname = getdev(lv);
-		if (devname)
-			system(sprintf("umount /dev/%s", devname));
+		if (devname) {
+			unregister(devname);
+			system(sprintf("umount /dev/%s 2>/dev/null", devname));
+		}
 	}
 
-	let lvchange_r = lvm("lvchange", up?"-k":"-a", "n", lv.lv_full_name);
-	if (up && lvchange_r.retval != 0)
-		return lvchange_r.retval;
+	if (lv.lv_active != up) {
+		let lvchange_r = lvm("lvchange", up?"-k":"-a", "n", lv.lv_full_name);
+		if (up && lvchange_r.retval != 0)
+			return lvchange_r.retval;
 
-	lvchange_r = lvm("lvchange", up?"-a":"-k", "y", lv.lv_full_name);
-	if (lvchange_r.retval != 0)
-		return lvchange_r.retval;
+		lvchange_r = lvm("lvchange", up?"-a":"-k", "y", lv.lv_full_name);
+		if (lvchange_r.retval != 0)
+			return lvchange_r.retval;
+	}
 
-	return 0
+	if (up)
+		return register(vol_name, getdev(lv));
+
+	return 0;
 }
 
 function lvm_up(vol_name) {
@@ -323,7 +322,6 @@ function lvm_create(vol_name, vol_size, vol_mode) {
 			return mkfs_ret;
 		}
 	}
-	uvol_uci_add(vol_name, sprintf("/dev/%s", getdev(lv)), "rw");
 
 	ret = lvm("lvchange", "-a", "n", lv.lv_full_name);
 	if (ret.retval != 0)
@@ -351,8 +349,6 @@ function lvm_remove(vol_name) {
 	if (ret.retval != 0)
 		return ret.retval;
 
-	uvol_uci_remove(vol_name);
-	uvol_uci_commit(vol_name);
 	return 0;
 }
 
@@ -402,8 +398,6 @@ function lvm_write(vol_name, vol_size) {
 			printf("reading finished %d bytes before given size!\n", ret);
 		}
 
-		uvol_uci_add(vol_name, sprintf("/dev/%s", getdev(lv)), "ro");
-
 		let ret = lvm("lvchange", "-a", "n", lv.lv_full_name);
 		if (ret.retval != 0)
 			return ret.retval;
@@ -423,29 +417,27 @@ function lvm_write(vol_name, vol_size) {
 }
 
 function lvm_detect() {
-	let temp_up = [];
-	let inactive_lv = lvs(vg_name, null, "lv_skip_activation!=0");
-	for (let lv in inactive_lv) {
-		lvm("lvchange", "-k", "n", lv.lv_full_name);
-		lvm("lvchange", "-a", "y", lv.lv_full_name);
-		push(temp_up, lv.lv_full_name);
-	}
-	sleep(1000);
-	uvol_uci_init();
 	for (let lv in lvs(vg_name)) {
-		let vol_name = substr(lv.lv_name, 3);
-		let vol_mode = substr(lv.lv_name, 0, 2);
-		uvol_uci_add(vol_name, sprintf("/dev/%s", getdev(lv)), vol_mode);
-	}
-	uvol_uci_commit();
-	for (let lv_full_name in temp_up) {
-		lvm("lvchange", "-a", "n", lv_full_name);
-		lvm("lvchange", "-k", "y", lv_full_name);
+		if (!lv.lv_active)
+			continue;
+
+		let mode = substr(lv.lv_name, 0, 2);
+		if (mode != "ro" && mode != "rw")
+			continue;
+
+		register(substr(lv.lv_name, 3), getdev(lv));
 	}
 	return 0;
 }
 
 function lvm_boot() {
+	for (let lv in lvs(vg_name, null, "lv_skip_activation=0")) {
+		let mode = substr(lv.lv_name, 0, 2);
+		if (mode != "ro" && mode != "rw")
+			continue;
+
+		lvm_up(substr(lv.lv_name, 3));
+	}
 	return 0;
 }
 
