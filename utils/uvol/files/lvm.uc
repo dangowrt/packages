@@ -95,6 +95,18 @@ function lvs(vg_name, vol_name, extra_exp) {
 	return ret;
 }
 
+function lvs_deleting(vg_name) {
+	let ret = [];
+	let tmp = lvm("lvs", "-o", "lv_active,lv_name,lv_full_name,lv_dm_path", "-S",
+		      sprintf("\"lvname=~^dd_.* && vg_name=%s\"", vg_name));
+	if (tmp && tmp.report.lv) {
+		ret = tmp.report.lv;
+		for (let r in ret)
+			r.lv_active = (r.lv_active == "active");
+	}
+	return ret;
+}
+
 function getdev(lv) {
 	if (!lv)
 		return null;
@@ -334,6 +346,25 @@ function lvm_create(vol_name, vol_size, vol_mode) {
 	return 0;
 }
 
+// Reap volumes marked for deferred deletion (dd_ prefix). A volume can only be
+// reaped once its backing device has no holder; blockd signals that moment with
+// a mount.umount notification (autofs idle-expiry), which triggers 'uvol reap'.
+// Still-held volumes are left for the next signal (or the boot sweep).
+function lvm_reap() {
+	for (let dd in lvs_deleting(vg_name)) {
+		let dev = getdev(dd);
+		if (dd.lv_active) {
+			let r = lvm("lvchange", "-a", "n", dd.lv_full_name);
+			if (r.retval != 0)
+				continue;
+		}
+		if (dev)
+			unregister(dev);
+		lvm("lvremove", "-y", dd.lv_full_name);
+	}
+	return 0;
+}
+
 function lvm_remove(vol_name) {
 	if (!vol_name || !vg_name)
 		return 22;
@@ -342,14 +373,15 @@ function lvm_remove(vol_name) {
 	if (!res[0])
 		return 2;
 
-	if (res[0].lv_active)
-		return 16;
-
-	let ret = lvm("lvremove", "-y", res[0].lv_full_name);
+	// mark for deletion: rename to the dd_ state (works whether the volume is
+	// active or not, and hides it from list/status). reap removes it now if the
+	// device is already free, otherwise blockd's mount.umount triggers reap once
+	// the holder releases it.
+	let ret = lvm("lvrename", vg_name, res[0].lv_name, sprintf("dd_%s", vol_name));
 	if (ret.retval != 0)
 		return ret.retval;
 
-	return 0;
+	return lvm_reap();
 }
 
 function lvm_dd(in_fd, out_fd, vol_size) {
@@ -431,6 +463,8 @@ function lvm_detect() {
 }
 
 function lvm_boot() {
+	// reap any volumes left half-deleted by a crash/reboot before activating
+	lvm_reap();
 	for (let lv in lvs(vg_name, null, "lv_skip_activation=0")) {
 		let mode = substr(lv.lv_name, 0, 2);
 		if (mode != "ro" && mode != "rw")
@@ -457,4 +491,5 @@ backend.up = lvm_up;
 backend.down = lvm_down;
 backend.create = lvm_create;
 backend.remove = lvm_remove;
+backend.reap = lvm_reap;
 backend.write = lvm_write;

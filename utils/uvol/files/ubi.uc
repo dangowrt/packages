@@ -172,22 +172,49 @@ function ubi_create(vol_name, vol_size, vol_mode) {
 	return 0;
 }
 
+function ubi_get_deleting() {
+	let ret = [];
+	for (vol_dir in fs.glob(sprintf("/sys/class/ubi/%s_*", ubidev))) {
+		let vol_ubiname = read_file(sprintf("%s/name", vol_dir));
+		if (!wildcard(vol_ubiname, "uvol-dd-*"))
+			continue;
+
+		push(ret, fs.basename(vol_dir));
+	}
+	return ret;
+}
+
+function ubi_reap() {
+	for (let vol_dev in ubi_get_deleting()) {
+		let volnum = split(vol_dev, "_")[1];
+		let blkdev = sprintf("ubiblock%s", substr(vol_dev, 3));
+		let isblock = fs.access(sprintf("/dev/%s", blkdev), "r");
+
+		if (isblock && system(sprintf("ubiblock --remove /dev/%s 2>/dev/null", vol_dev)) != 0)
+			continue;
+
+		if (!isblock)
+			system(sprintf("umount /dev/%s 2>/dev/null", vol_dev));
+
+		if (system(sprintf("ubirmvol /dev/%s -n %d 2>/dev/null", ubidev, volnum)) != 0)
+			continue;
+
+		unregister(isblock ? blkdev : vol_dev);
+	}
+	return 0;
+}
+
 function ubi_remove(vol_name) {
 	let vol_dev = ubi_get_dev(vol_name);
 	if (!vol_dev)
 		return 2;
 
-	let vol_mode = vol_get_mode(vol_dev);
-	if (vol_mode == "rw" || vol_mode == "ro")
-		return 16;
-
-	let volnum = split(vol_dev, "_")[1];
-
-	let ret = system(sprintf("ubirmvol /dev/%s -n %d", ubidev, volnum));
+	let vol_ubiname = read_file(sprintf("/sys/class/ubi/%s/name", vol_dev));
+	let ret = system(sprintf("ubirename /dev/%s \"%s\" \"uvol-dd-%s\"", ubidev, vol_ubiname, vol_name));
 	if (ret != 0)
 		return ret;
 
-	return 0;
+	return ubi_reap();
 }
 
 function ubi_up(vol_name) {
@@ -297,6 +324,7 @@ function ubi_detect() {
 }
 
 function ubi_boot() {
+	ubi_reap();
 	return ubi_register_active();
 }
 
@@ -338,4 +366,5 @@ backend.up = ubi_up;
 backend.down = ubi_down;
 backend.create = ubi_create;
 backend.remove = ubi_remove;
+backend.reap = ubi_reap;
 backend.write = ubi_write;
