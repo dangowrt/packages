@@ -131,10 +131,6 @@ function ubi_device(vol_name) {
 }
 
 function ubi_create(vol_name, vol_size, vol_mode) {
-	let vol_dev = ubi_get_dev(vol_name);
-	if (vol_dev)
-		return 17;
-
 	let mode;
 	if (vol_mode == "ro" || vol_mode == "wo")
 		mode = "wo";
@@ -146,6 +142,13 @@ function ubi_create(vol_name, vol_size, vol_mode) {
 	let vol_size = +vol_size;
 	if (vol_size <= 0)
 		return 22;
+
+	ubi_purge_incomplete(vol_name, vol_size);
+
+	let vol_dev = ubi_get_dev(vol_name);
+	if (vol_dev)
+		return 17;
+
 	let ret = system(sprintf("ubimkvol /dev/%s -N \"uvol-%s-%s\" -s %d", ubidev, mode, vol_name, vol_size));
 	if (ret != 0)
 		return ret;
@@ -182,6 +185,41 @@ function ubi_get_deleting() {
 		push(ret, fs.basename(vol_dir));
 	}
 	return ret;
+}
+
+function ubi_get_incomplete(vol_name) {
+	let ret = [];
+	let pat = vol_name ? sprintf("uvol-w[op]-%s", vol_name) : "uvol-w[op]-*";
+	for (vol_dir in fs.glob(sprintf("/sys/class/ubi/%s_*", ubidev))) {
+		let vol_ubiname = read_file(sprintf("%s/name", vol_dir));
+		if (!wildcard(vol_ubiname, pat))
+			continue;
+		push(ret, {
+			dev: fs.basename(vol_dir),
+			lebs: +read_file(sprintf("%s/reserved_ebs", vol_dir)),
+			leb: +read_file(sprintf("%s/usable_eb_size", vol_dir)),
+		});
+	}
+	return ret;
+}
+
+// purge incomplete (wo/wp) leftovers; with match_size, only those whose
+// reservation matches that size (null purges all)
+function ubi_purge_incomplete(vol_name, match_size) {
+	for (let v in ubi_get_incomplete(vol_name)) {
+		if (match_size != null) {
+			if (!v.leb || !v.lebs)
+				continue;
+			let want = match_size / v.leb;
+			if (match_size % v.leb)
+				want++;
+			if (v.lebs != want)
+				continue;
+		}
+		let volnum = split(v.dev, "_")[1];
+		system(sprintf("ubirmvol /dev/%s -n %d 2>/dev/null", ubidev, volnum));
+	}
+	return 0;
 }
 
 function ubi_reap() {
@@ -324,7 +362,9 @@ function ubi_detect() {
 }
 
 function ubi_boot() {
+	// clear crash/power-loss leftovers before activating
 	ubi_reap();
+	ubi_purge_incomplete();
 	return ubi_register_active();
 }
 

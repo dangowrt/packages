@@ -107,6 +107,33 @@ function lvs_deleting(vg_name) {
 	return ret;
 }
 
+function lvs_incomplete(vg_name, vol_name) {
+	let ret = [];
+	let tmp = lvm("lvs", "-o", "lv_active,lv_name,lv_full_name,lv_size", "-S",
+		      sprintf("\"lvname=~^w[op]_%s\$ && vg_name=%s\"", vol_name ?? ".*", vg_name));
+	if (tmp && tmp.report.lv) {
+		ret = tmp.report.lv;
+		for (let r in ret) {
+			r.lv_active = (r.lv_active == "active");
+			r.lv_size = +(rtrim(r.lv_size, "B"));
+		}
+	}
+	return ret;
+}
+
+// purge incomplete (wo_/wp_) leftovers; with match_size, only those of exactly
+// that allocated size (null purges all)
+function lvm_purge_incomplete(vol_name, match_size) {
+	for (let lv in lvs_incomplete(vg_name, vol_name)) {
+		if (match_size != null && lv.lv_size != match_size)
+			continue;
+		if (lv.lv_active)
+			lvm("lvchange", "-a", "n", lv.lv_full_name);
+		lvm("lvremove", "-y", lv.lv_full_name);
+	}
+	return 0;
+}
+
 function getdev(lv) {
 	if (!lv)
 		return null;
@@ -285,13 +312,17 @@ function lvm_create(vol_name, vol_size, vol_mode) {
 	if (vol_size <= 0)
 		return 22;
 
+	let size_ext = vol_size / vg.vg_extent_size;
+	if (vol_size % vg.vg_extent_size)
+		++size_ext;
+
+	// reclaim only an exact name+size retry; a size mismatch surfaces as EEXIST
+	lvm_purge_incomplete(vol_name, size_ext * vg.vg_extent_size);
+
 	let res = lvs(vg_name, vol_name);
 	if (res[0])
 		return 17;
 
-	let size_ext = vol_size / vg.vg_extent_size;
-	if (vol_size % vg.vg_extent_size)
-		++size_ext;
 	let lvmode, mode;
 	if (vol_mode == "ro" || vol_mode == "wo") {
 		lvmode = "r";
@@ -463,8 +494,9 @@ function lvm_detect() {
 }
 
 function lvm_boot() {
-	// reap any volumes left half-deleted by a crash/reboot before activating
+	// clear crash/power-loss leftovers before activating
 	lvm_reap();
+	lvm_purge_incomplete();
 	for (let lv in lvs(vg_name, null, "lv_skip_activation=0")) {
 		let mode = substr(lv.lv_name, 0, 2);
 		if (mode != "ro" && mode != "rw")

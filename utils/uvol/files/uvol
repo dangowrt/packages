@@ -85,6 +85,16 @@ if (!(cmd in keys(backend))) {
 	return 22;
 }
 
+// serialise state-mutating commands device-wide; released on process exit
+let uvol_mutating = [ "boot", "detect", "create", "write", "up", "down", "remove", "reap" ];
+let uvol_lockfd;
+if (index(uvol_mutating, cmd) >= 0) {
+	fs.mkdir("/tmp/run", 0755);
+	uvol_lockfd = fs.open("/tmp/run/uvol.lock", "a");
+	if (uvol_lockfd)
+		uvol_lockfd.lock("x");
+}
+
 let meta_init = function() {
 	let sz = backend.size(".meta");
 	if (type(sz) != "string" || +sz <= 0) {
