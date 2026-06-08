@@ -14,7 +14,7 @@ let uvol_target = function(vol_name) {
 };
 
 uvol_mount = {
-	register: function(vol_name, dev_name) {
+	register: function(vol_name, dev_name, read_only) {
 		if (!dev_name)
 			return 22;
 		if (substr(vol_name, 0, 1) == "." && vol_name != ".meta")
@@ -27,14 +27,20 @@ uvol_mount = {
 		else if (st && st.type == "directory")
 			mount_fs.rmdir(target);
 
+		let data = {
+			device: dev_name,
+			target: target,
+			autofs: 1,
+		};
+		// declare the volume's read-only-ness to blockd, which carries it
+		// to block as a mount option; block never guesses from the fs type.
+		if (read_only)
+			data.options = "ro";
+
 		mount_ubus.call({
 			object: "block",
 			method: "hotplug",
-			data: {
-				device: dev_name,
-				target: target,
-				autofs: 1,
-			},
+			data: data,
 		});
 		return mount_ubus.error() ? -1 : 0;
 	},

@@ -291,7 +291,7 @@ function lvm_updown(vol_name, up) {
 	}
 
 	if (up)
-		return register(vol_name, getdev(lv));
+		return register(vol_name, getdev(lv), substr(lv.lv_name, 0, 2) == "ro");
 
 	return 0;
 }
@@ -309,7 +309,7 @@ function lvm_create(vol_name, vol_size, vol_mode) {
 		return 22;
 
 	vol_size = +vol_size;
-	if (vol_size <= 0)
+	if (vol_size != vol_size || vol_size <= 0)
 		return 22;
 
 	let size_ext = vol_size / vg.vg_extent_size;
@@ -375,6 +375,79 @@ function lvm_create(vol_name, vol_size, vol_mode) {
 		return ret.retval;
 
 	return 0;
+}
+
+// identify the on-disk filesystem by superblock magic (no external tool needed)
+function fs_type(devpath) {
+	let f = fs.open(devpath, "r");
+	if (!f)
+		return null;
+	f.seek(1024);
+	let sb = f.read(58);
+	f.close();
+	if (type(sb) != "string" || length(sb) < 58)
+		return null;
+	if (ord(sb, 0) == 0x10 && ord(sb, 1) == 0x20 && ord(sb, 2) == 0xf5 && ord(sb, 3) == 0xf2)
+		return "f2fs";
+	if (ord(sb, 56) == 0x53 && ord(sb, 57) == 0xef)
+		return "ext";
+	return null;
+}
+
+// Grow a rw volume in place; the fs (ext4 or f2fs, chosen at create by size) is
+// grown with its own tool. Shrink is refused. The fs-grow tool is an optional
+// dependency: if absent, report and refuse rather than grow the LV past the fs.
+function lvm_resize(vol_name, vol_size) {
+	if (!vol_name || !vg_name)
+		return 22;
+
+	vol_size = +vol_size;
+	if (vol_size != vol_size || vol_size <= 0)
+		return 22;
+
+	let res = lvs(vg_name, vol_name);
+	if (!res[0])
+		return 2;
+
+	if (substr(res[0].lv_name, 0, 2) != "rw")
+		return 1;
+
+	let size_ext = vol_size / vg.vg_extent_size;
+	if (vol_size % vg.vg_extent_size)
+		++size_ext;
+
+	let new_size = size_ext * vg.vg_extent_size;
+	if (new_size == +res[0].lv_size)
+		return 0;
+	if (new_size < +res[0].lv_size)
+		return 22;
+
+	let dev = getdev(res[0]);
+	if (!dev)
+		return 2;
+
+	let fstype = fs_type(sprintf("/dev/%s", dev));
+	let tool = (fstype == "f2fs") ? "resize.f2fs" : (fstype == "ext") ? "resize2fs" : null;
+	if (!tool) {
+		warn(sprintf("uvol: cannot identify filesystem on %s; not resizing\n", vol_name));
+		return 95;
+	}
+
+	// the fs-grow tool first, so the LV is never left larger than its filesystem
+	if (system(sprintf("command -v %s >/dev/null 2>&1", tool)) != 0) {
+		warn(sprintf("uvol: %s not found; install %s to grow this %s volume\n",
+			     tool, (fstype == "f2fs") ? "f2fs-tools" : "e2fsprogs", fstype));
+		return 95;
+	}
+
+	let ret = lvm("lvextend", "-l", size_ext, res[0].lv_full_name);
+	if (ret.retval != 0)
+		return ret.retval;
+
+	if (fstype == "f2fs")
+		return system(sprintf("resize.f2fs /dev/%s", dev));
+
+	return system(sprintf("resize2fs /dev/%s", dev));
 }
 
 // Reap volumes marked for deferred deletion (dd_ prefix). A volume can only be
@@ -488,7 +561,7 @@ function lvm_detect() {
 		if (mode != "ro" && mode != "rw")
 			continue;
 
-		register(substr(lv.lv_name, 3), getdev(lv));
+		register(substr(lv.lv_name, 3), getdev(lv), mode == "ro");
 	}
 	return 0;
 }
@@ -522,6 +595,7 @@ backend.device = lvm_device;
 backend.up = lvm_up;
 backend.down = lvm_down;
 backend.create = lvm_create;
+backend.resize = lvm_resize;
 backend.remove = lvm_remove;
 backend.reap = lvm_reap;
 backend.write = lvm_write;

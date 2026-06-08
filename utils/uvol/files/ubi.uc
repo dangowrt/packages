@@ -175,6 +175,33 @@ function ubi_create(vol_name, vol_size, vol_mode) {
 	return 0;
 }
 
+// Grow a rw volume; UBIFS uses the new size directly. Shrink is refused.
+function ubi_resize(vol_name, vol_size) {
+	vol_size = +vol_size;
+	if (vol_size <= 0)
+		return 22;
+
+	let vol_dev = ubi_get_dev(vol_name);
+	if (!vol_dev)
+		return 2;
+
+	if (vol_get_mode(vol_dev) != "rw")
+		return 1;
+
+	let leb = +read_file(sprintf("/sys/class/ubi/%s/usable_eb_size", vol_dev));
+	let cur_lebs = +read_file(sprintf("/sys/class/ubi/%s/reserved_ebs", vol_dev));
+	let req_lebs = vol_size / leb;
+	if (vol_size % leb)
+		++req_lebs;
+
+	if (req_lebs == cur_lebs)
+		return 0;
+	if (req_lebs < cur_lebs)
+		return 22;
+
+	return system(sprintf("ubirsvol /dev/%s -N \"uvol-rw-%s\" -s %d", ubidev, vol_name, vol_size));
+}
+
 function ubi_get_deleting() {
 	let ret = [];
 	for (vol_dir in fs.glob(sprintf("/sys/class/ubi/%s_*", ubidev))) {
@@ -277,13 +304,13 @@ function ubi_up(vol_name) {
 		if (ret != 0)
 			return ret;
 
-		return register(vol_name, sprintf("ubiblock%s", substr(vol_dev, 3)));
+		return register(vol_name, sprintf("ubiblock%s", substr(vol_dev, 3)), true);
 	} else if (vol_mode == "wd") {
 		let ret = system(sprintf("ubirename /dev/%s \"uvol-wd-%s\" \"uvol-rw-%s\"", ubidev, vol_name, vol_name));
 		if (ret != 0)
 			return ret;
 
-		return register(vol_name, vol_dev);
+		return register(vol_name, vol_dev, false);
 	}
 	return 0;
 }
@@ -349,9 +376,9 @@ function ubi_register_active() {
 
 		if (vol_mode == "ro") {
 			system(sprintf("ubiblock --create /dev/%s", vol_dev));
-			register(vol_name, sprintf("ubiblock%s", substr(vol_dev, 3)));
+			register(vol_name, sprintf("ubiblock%s", substr(vol_dev, 3)), true);
 		} else {
-			register(vol_name, vol_dev);
+			register(vol_name, vol_dev, false);
 		}
 	}
 	return 0;
@@ -405,6 +432,7 @@ backend.device = ubi_device;
 backend.up = ubi_up;
 backend.down = ubi_down;
 backend.create = ubi_create;
+backend.resize = ubi_resize;
 backend.remove = ubi_remove;
 backend.reap = ubi_reap;
 backend.write = ubi_write;
