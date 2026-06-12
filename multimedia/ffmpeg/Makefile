@@ -348,7 +348,7 @@ endef
 define Package/libffmpeg-full
 $(call Package/libffmpeg/Default)
  TITLE+= (full)
- DEPENDS+= +alsa-lib +libgnutls +PACKAGE_libopus:libopus \
+ DEPENDS+= +alsa-lib +libgnutls +libdrm +PACKAGE_libopus:libopus \
     +PACKAGE_libv4l:libv4l \
     +SOFT_FLOAT:shine \
     +!SOFT_FLOAT:lame-lib \
@@ -472,6 +472,7 @@ ifeq ($(BUILD_VARIANT),full)
 
 	FFMPEG_CONFIGURE+= \
 		--enable-gnutls \
+		--enable-libdrm \
 		$(if $(CONFIG_BUILD_PATENTED),, \
 			$(call FFMPEG_DISABLE,decoder,$(FFMPEG_PATENTED_DECODERS)) \
 			$(call FFMPEG_DISABLE,muxer,$(FFMPEG_PATENTED_MUXERS)) \
