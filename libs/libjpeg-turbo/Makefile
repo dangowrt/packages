@@ -15,8 +15,10 @@ PKG_CPE_ID:=cpe:/a:libjpeg-turbo:libjpeg-turbo
 
 # Allows ASM compilation for speed
 PKG_BUILD_FLAGS:=no-mips16
+HOST_BUILD_PARALLEL:=1
 
 include $(INCLUDE_DIR)/package.mk
+include $(INCLUDE_DIR)/host-build.mk
 include $(INCLUDE_DIR)/cmake.mk
 
 define Package/libjpeg-turbo/Default
@@ -54,6 +56,12 @@ CMAKE_OPTIONS += \
 	-DWITH_SIMD=O$(if $(findstring mips,$(CONFIG_ARCH)),FF,N) \
 	-DWITH_TURBOJPEG=OFF
 
+CMAKE_HOST_OPTIONS += \
+	-DWITH_SIMD=OFF \
+	-DWITH_TURBOJPEG=OFF \
+	-DENABLE_SHARED=OFF \
+	-DENABLE_STATIC=ON
+
 ifneq ($(findstring arm,$(CONFIG_ARCH)),)
 ifeq ($(findstring neon,$(CONFIG_CPU_TYPE)),)
 	CMAKE_OPTIONS += -DWITH_SIMD=OFF
@@ -86,5 +94,6 @@ define Package/libjpeg-turbo-utils/install
 	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/bin/jpegtran $(1)/usr/bin
 endef
 
+$(eval $(call HostBuild))
 $(eval $(call BuildPackage,libjpeg-turbo))
 $(eval $(call BuildPackage,libjpeg-turbo-utils))
