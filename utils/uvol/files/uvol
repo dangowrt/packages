@@ -139,6 +139,89 @@ let legacy_output = function(var) {
 	return out;
 };
 
+// Content-addressed volumes are named "<algo>-<hexdigest>"; the name carries the
+// expected digest of its content. Validation lives here in the generic layer so
+// backends stay plain storage. Add an entry to ca_algos to support a new digest.
+let ca_algos = {
+	sha256: { cmd: "sha256sum", len: 64 },
+};
+
+let ca_parse = function(name) {
+	let m = match(name, /^([0-9a-z]+)-([0-9a-f]+)$/);
+	if (!m)
+		return null;
+	let a = ca_algos[m[1]];
+	if (!a || length(m[2]) != a.len)
+		return null;
+	return { cmd: a.cmd, hash: m[2] };
+};
+
+let ca_digest = function(cmd, size, path) {
+	let cahash = "/tmp/run/uvol.cahash";
+	let src = path ? sprintf("head -c %d %s", size, path) : sprintf("head -c %d", size);
+	system(sprintf("%s | %s > %s", src, cmd, cahash));
+	let f = fs.open(cahash, "r");
+	if (!f)
+		return null;
+	let line = f.read("line");
+	f.close();
+	return split(trim(line), " ")[0];
+};
+
+let ca_complete = function(name) {
+	let st = backend.status(name);
+	if (st == 0)
+		return true;
+	if (st == 2)
+		return false;
+	if (backend.up(name) == 0) {
+		backend.down(name);
+		return true;
+	}
+	return false;
+};
+
+let ca_readback = function(name, size, cmd) {
+	if (backend.up(name) != 0)
+		return null;
+	let dev = backend.device(name);
+	let got = null;
+	if (type(dev) == "string")
+		got = ca_digest(cmd, size, (substr(dev, 0, 1) == "/") ? dev : "/dev/" + dev);
+	backend.down(name);
+	return got;
+};
+
+let ca_mismatch = function(name) {
+	printf("content hash mismatch for %s\n", name);
+	exit(74);
+};
+
+if (cmd == "create" && ca_parse(ARGV[0])) {
+	let ret = backend.create(...ARGV);
+	exit(ret == 17 ? 0 : ret);
+}
+
+if (cmd == "write") {
+	let ca = ca_parse(ARGV[0]);
+	if (ca) {
+		let size = +ARGV[1];
+		if (ca_complete(ARGV[0])) {
+			if (ca_digest(ca.cmd, size, null) != ca.hash)
+				ca_mismatch(ARGV[0]);
+			exit(0);
+		}
+		let ret = backend.write(ARGV[0], size);
+		if (ret != 0)
+			exit(ret);
+		if (ca_readback(ARGV[0], size, ca.cmd) != ca.hash) {
+			backend.remove(ARGV[0]);
+			ca_mismatch(ARGV[0]);
+		}
+		exit(0);
+	}
+}
+
 if (type(backend[cmd]) == "function") {
 	let ret = backend[cmd](...ARGV);
 	if (type(ret) == "int") {
