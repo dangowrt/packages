@@ -27,7 +27,7 @@ define Package/uvol
   CATEGORY:=Utilities
   SUBMENU:=Disc
   TITLE:=OpenWrt UBI/LVM volume abstraction
-  DEPENDS:=+blockd +ucode +ucode-mod-fs +ucode-mod-math +ucode-mod-uci +ucode-mod-ubus
+  DEPENDS:=+blockd +ucode +ucode-mod-fs +ucode-mod-math +ucode-mod-uci +ucode-mod-ubus +e2fsprogs +mkf2fs +f2fsck
   PKGARCH=all
 endef
 
