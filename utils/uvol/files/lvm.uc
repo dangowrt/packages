@@ -357,7 +357,7 @@ function lvm_create(vol_name, vol_size, vol_mode) {
 			return mkfs_ret;
 		}
 	} else {
-		let mkfs_ret = system(sprintf("/usr/sbin/mke2fs -F -t ext4 -O ^has_journal -L \"%s\" \"%s\"", vol_name, lv.lv_path));
+		let mkfs_ret = system(sprintf("/usr/sbin/mke2fs -F -t ext4 -O has_journal -L \"%s\" \"%s\"", vol_name, lv.lv_path));
 		if (mkfs_ret != 0) {
 			lvchange_r = lvm("lvchange", "-a", "n", lv.lv_full_name);
 			if (lvchange_r.retval != 0)

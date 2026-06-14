@@ -36,6 +36,8 @@ uvol_mount = {
 		// to block as a mount option; block never guesses from the fs type.
 		if (read_only)
 			data.options = "ro";
+		else
+			data.check_fs = 1;
 
 		mount_ubus.call({
 			object: "block",
