@@ -6,15 +6,14 @@ NAME=uvol
 PROG=/usr/sbin/uvol
 
 start_service() {
-	:
+	local ready
+
+	ready=$(ubus call block status 2>/dev/null | jsonfilter -e '@.ready')
+	[ "$ready" = "true" ] && "$PROG" boot
 }
 
 service_triggers() {
-	# blockd announces mount.ready once it is up -- at boot once it has finished
-	# coldplug, and again after a restart (e.g. a package upgrade). Opt in to
-	# procd replaying the last announcement to this trigger even when it registers
-	# later, so bring the volumes up and register their autofs mounts here.
-	procd_add_raw_trigger_replay "mount.ready" 1000 "$PROG" boot
+	procd_add_raw_trigger "mount.ready" 1000 "$PROG" boot
 
 	# blockd emits mount.umount when an idle volume's device becomes free;
 	# reap any volume that was marked for deferred deletion while in use
