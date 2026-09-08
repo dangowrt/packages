@@ -1,0 +1,65 @@
+configure: use LT_INIT instead of picking up libtool from PATH
+
+AC_CHECK_PROGS(LIBTOOL, libtool) grabs whatever libtool the build host
+offers. A host libtool script has the *host* compiler baked into its
+tag configuration, and in link mode libtool's archive_cmds use that
+baked $CC rather than the compiler passed on the command line - so in
+a cross build the shared library gets linked with the host compiler
+and target flags ("gcc: error: unrecognized command-line option
+'-mfloat-abi=hard'"), or worse, silently host-linked.
+
+Use LT_INIT so configure generates a package-local libtool configured
+for the actual (cross) toolchain; @LIBTOOL@ then points at it. LT_INIT's
+LIBTOOL value references $(top_builddir), which the handwritten
+Makefile.in never defines - provide it alongside srcdir.
+
+--- a/configure.ac
++++ b/configure.ac
+@@ -53,36 +53,7 @@ AC_ADD_CFLAGS(-Wshadow)
+ dnl! AC_ADD_CFLAGS(-Werror)
+ dnl! AC_ADD_CFLAGS([-Wl,--as-needed])
+ 
+-AC_CHECK_PROGS(LIBTOOL, libtool)
+-
+-if test -z "$LIBTOOL"
+-then
+-  AC_MSG_RESULT([
+-        You must have GNU Libtool installed to build fstrcmp.
+-        Homepage: http://www.gnu.org/software/libtool/])
+-  OK=no
+-  if apt-get --version > /dev/null 2> /dev/null; then
+-    AC_MSG_RESULT([
+-        The following command may be used to install it:
+-        sudo apt-get install libtool
+-    ])
+-    OK=yes
+-  fi
+-  if yum --version > /dev/null 2> /dev/null; then
+-    AC_MSG_RESULT([
+-        The following command may be used to install it:
+-        sudo yum install libtool
+-    ])
+-    OK=yes
+-  fi
+-  if test "$OK" != "yes"; then
+-    AC_MSG_RESULT([
+-        If you are using a package based install, you will need the
+-        libtool package.
+-    ])
+-  fi
+-  exit 1
+-fi
++LT_INIT
+ 
+ AC_CHECK_PROGS(GROFF, groff roff)
+ AC_CHECK_PROGS(SOELIM, gsoelim soelim)
+--- a/Makefile.in
++++ b/Makefile.in
+@@ -36,6 +36,7 @@
+ 
+ srcdir = @srcdir@
+ VPATH = @srcdir@
++top_builddir = .
+ 
+ #
+ # the name of the install program to use
