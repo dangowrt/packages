@@ -8,7 +8,7 @@ include $(TOPDIR)/rules.mk
 PKG_NAME:=fstrcmp
 PKG_VERSION:=0.7
 PKG_UPSTREAM_VERSION:=0.7.D001
-PKG_RELEASE:=1
+PKG_RELEASE:=2
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_UPSTREAM_VERSION).tar.gz
 PKG_SOURCE_URL:=@SF/fstrcmp
@@ -43,6 +43,13 @@ define Build/InstallDev
 	$(CP) $(PKG_INSTALL_DIR)/usr/include/fstrcmp.h $(1)/usr/include/
 	$(INSTALL_DIR) $(1)/usr/lib
 	$(CP) $(PKG_INSTALL_DIR)/usr/lib/libfstrcmp.{a,so*} $(1)/usr/lib/
+	# packages looking fstrcmp up via pkg-config need the .pc;
+	# rewrite the absolute paths relative to ${prefix} so OpenWrt's
+	# pkg-config wrapper resolves them inside the staging dir
+	$(INSTALL_DIR) $(1)/usr/lib/pkgconfig
+	$(INSTALL_DATA) $(PKG_INSTALL_DIR)/usr/lib/pkgconfig/fstrcmp.pc $(1)/usr/lib/pkgconfig/
+	$(SED) 's,^libdir=.*,libdir=$$$${exec_prefix}/lib,; s,^includedir=.*,includedir=$$$${prefix}/include,' \
+		$(1)/usr/lib/pkgconfig/fstrcmp.pc
 endef
 
 define Package/libfstrcmp/install
