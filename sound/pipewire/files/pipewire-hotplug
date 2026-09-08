@@ -1,0 +1,47 @@
+# Restart the PipeWire stack when an ALSA sound card appears or disappears.
+#
+# This image uses libudev-zero (no udevd rules/properties), so PipeWire's
+# udev-based ALSA monitor never surfaces cards - every ALSA device is wired
+# statically via context.objects adapter nodes (see pipewire.conf.d), which are
+# only created at pipewire startup. A card hot-plugged at runtime therefore
+# needs a stack restart to appear. This hook automates that, at the cost of a
+# few seconds of audio interruption per plug/unplug event.
+#
+# NOTE: sourced (not executed) by hotplug-call - no exit/shebang, no set -e.
+
+pw_hotplug_restart() {
+	logger -t pipewire-hotplug "sound card $ACTION ($DEVICENAME): restarting PipeWire stack"
+	/etc/init.d/pipewire restart
+	sleep 3
+	[ -x /etc/init.d/pipewire-pulse ] && /etc/init.d/pipewire-pulse restart
+	[ -x /etc/init.d/wireplumber ] && /etc/init.d/wireplumber restart
+	sleep 5
+	# dependent audio services: their pipewire connections/capture sinks die
+	# with the daemon, so bounce whatever of them is present and enabled
+	for svc in snapserver librespot snapclient; do
+		[ -x /etc/init.d/$svc ] && /etc/init.d/$svc enabled 2>/dev/null && /etc/init.d/$svc restart
+		sleep 1
+	done
+	# snapclient-bt heals itself via its reconcile loop - nothing to do
+	rmdir /var/run/pipewire-hotplug.lock 2>/dev/null
+}
+
+case "$ACTION" in
+	add|remove)
+		case "$DEVICENAME" in
+			snd/controlC*|controlC*)
+				# one control device per card -> one event per plug/unplug.
+				# Skip while pipewire isn't running (boot-time coldplug
+				# replay - the boot-attached cards are handled by the
+				# static config at normal service start).
+				if pidof pipewire >/dev/null 2>&1; then
+					# debounce bursts (add+remove pairs, multi-function
+					# cards): only one restart runs at a time
+					if mkdir /var/run/pipewire-hotplug.lock 2>/dev/null; then
+						pw_hotplug_restart &
+					fi
+				fi
+				;;
+		esac
+		;;
+esac

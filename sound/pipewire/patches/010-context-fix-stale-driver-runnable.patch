@@ -1,0 +1,53 @@
+From: Mirko Vogt <foss@mirko.in>
+Subject: context: don't let a stale driver runnable flag idle a live group
+
+Observed in production (1.6.8, twice with different triggers, always
+after graph reconfiguration): follower nodes of a driver are started
+(clients report STREAMING) while the driver itself is left idle, so the
+group is never scheduled. All nodes show state "running", no error is
+delivered, and only recreating the nodes recovers the graph.
+
+Mechanism: ensure_state() gates the driver start on node->runnable. The
+per-driver tail loop computed the group's "running" from the driver's
+own aggregated runnable flag (running = n->runnable), which can go
+stale when a group survives a reconfiguration without being re-collected
+through move_to_driver(). Followers that are active and runnable then
+no longer imply a runnable driver, and the group wedges silently.
+
+Compute "running" from the followers' actual runnable state instead
+(the driver itself is part of its follower list, so driver-only groups
+behave as before), and re-align the driver's runnable flag when it is
+found stale - with a warning, so any remaining path that produces the
+stale flag identifies itself in the logs.
+
+--- a/src/pipewire/context.c
++++ b/src/pipewire/context.c
+@@ -1625,8 +1625,8 @@ int pw_context_recalc_graph(struct pw_co
+ 			     fraction_compare(&s->rate, &rate) < 0))
+ 				rate = s->rate;
+ 
+-			if (s->active)
+-				running = n->runnable;
++			if (s->active && s->runnable)
++				running = true;
+ 
+ 			pw_log_debug("%p: follower %p running:%d runnable:%d rate:%u/%u latency %u/%u '%s'",
+ 				context, s, running, s->runnable, rate.num, rate.denom,
+@@ -1830,6 +1830,17 @@ int pw_context_recalc_graph(struct pw_co
+ 			SPA_ATOMIC_STORE(n->rt.target.activation->command, transport);
+ 		}
+ 
++		/* Self-heal: a driver with active runnable followers must be
++		 * runnable itself, or ensure_state() will start the followers
++		 * but leave the driver idle and the group is never scheduled.
++		 * The aggregated flag can go stale across reconfigurations. */
++		if (running && !n->runnable) {
++			pw_log_warn("%p: driver '%s' has runnable followers but"
++					" is not marked runnable, fixing",
++					context, n->name);
++			n->runnable = true;
++		}
++
+ 		/* now that all the followers are ready, start the driver */
+ 		ensure_state(n, running);
+ 	}
