@@ -424,6 +424,19 @@ endef
 define Build/Install
 endef
 
+# Stage libsmbclient for build-time consumers (e.g. Kodi's SMB support).
+# The library itself already ships in samba4-libs (wholesale *.so* copy);
+# samba's build never installs the public header, so take it from the
+# generated public-headers directory.
+define Build/InstallDev
+	$(INSTALL_DIR) $(1)/usr/include/samba-4.0
+	$(CP) $(PKG_BUILD_DIR)/bin/default/include/public/libsmbclient.h $(1)/usr/include/samba-4.0/
+	$(INSTALL_DIR) $(1)/usr/lib $(1)/usr/lib/pkgconfig
+	$(CP) $(PKG_INSTALL_DIR)/usr/lib/*.so* $(1)/usr/lib/
+	$(CP) $(PKG_INSTALL_DIR)/usr/lib/samba $(1)/usr/lib/
+	$(CP) $(PKG_INSTALL_DIR)/usr/lib/pkgconfig/smbclient.pc $(1)/usr/lib/pkgconfig/
+endef
+
 define Package/samba4-libs/install
 	$(INSTALL_DIR) $(1)/usr/lib
 	$(CP) $(PKG_INSTALL_DIR)/usr/lib/*.so* $(1)/usr/lib/
