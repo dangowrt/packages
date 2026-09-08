@@ -9,7 +9,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=hidapi
 PKG_VERSION:=0.15.0
-PKG_RELEASE:=1
+PKG_RELEASE:=2
 
 PKG_SOURCE_PROTO:=git
 PKG_SOURCE_URL:=https://github.com/libusb/hidapi
@@ -50,6 +50,8 @@ define Build/InstallDev
 	$(INSTALL_DIR) $(1)/usr/lib/pkgconfig/
 	$(CP) $(PKG_INSTALL_DIR)/usr/lib/pkgconfig/hidapi-libusb.pc $(1)/usr/lib/pkgconfig/
 	$(CP) $(PKG_INSTALL_DIR)/usr/lib/pkgconfig/hidapi-hidraw.pc $(1)/usr/lib/pkgconfig/
+	$(INSTALL_DIR) $(1)/usr/lib/cmake/hidapi
+	$(CP) $(PKG_INSTALL_DIR)/usr/lib/cmake/hidapi/*.cmake $(1)/usr/lib/cmake/hidapi/
 endef
 
 define Package/hidapi/install
