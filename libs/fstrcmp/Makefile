@@ -39,6 +39,16 @@ endef
 
 CONFIGURE_ARGS += --prefix=/usr
 
+# Build/install only program+library artifacts: the doc targets render
+# PDFs via groff/ps2pdf, which the build host need not provide.
+define Build/Compile
+	$(call Build/Compile/Default,all-bin)
+endef
+
+define Build/Install
+	$(call Build/Install/Default,install-bin install-include install-libdir)
+endef
+
 define Build/InstallDev
 	$(INSTALL_DIR) $(1)/usr/include
 	$(CP) $(PKG_INSTALL_DIR)/usr/include/fstrcmp.h $(1)/usr/include/
