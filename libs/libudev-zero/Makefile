@@ -30,8 +30,39 @@ define Package/libudev-zero
   CONFLICTS:=libudev eudev udev
 endef
 
+define Package/libudev-zero-hotplug
+  SECTION:=libs
+  CATEGORY:=Libraries
+  TITLE:=Hotplug uevent rebroadcaster for libudev-zero monitors
+  URL:=https://github.com/illiliti/libudev-zero
+  DEPENDS:=+libudev-zero
+endef
+
+define Package/libudev-zero-hotplug/description
+ libudev-zero's udev_monitor listens on netlink group 0x4, NOT on the
+ kernel's uevent group - by upstream design an external component must
+ rebroadcast kernel uevents to that group (see contrib/ upstream), or every
+ libudev monitor is deaf and applications only see devices present at
+ startup (e.g. Kodi/libinput never noticing a Bluetooth remote that
+ connects while running). This package provides upstream's contrib helper
+ (env -> netlink 0x4) wired into procd via /etc/hotplug.d/ for the input
+ and drm subsystems (input device hotplug + display/HDMI hotplug). The
+ hotplug scripts carry a marker through the rebroadcast to stop procd from
+ amplifying our own messages into an event storm (procd receives group-0x4
+ messages too).
+endef
+
 MAKE_FLAGS += \
 	PREFIX=/usr
+
+# upstream builds only the library; the contrib rebroadcast helper (a
+# single self-contained C file, no deps) is compiled here explicitly
+define Build/Compile
+	$(call Build/Compile/Default)
+	$(TARGET_CC) $(TARGET_CFLAGS) $(TARGET_LDFLAGS) \
+		-o $(PKG_BUILD_DIR)/contrib/uevent-rebroadcast \
+		$(PKG_BUILD_DIR)/contrib/helper.c
+endef
 
 define Build/InstallDev
 	$(INSTALL_DIR) $(1)/usr/include
@@ -47,4 +78,16 @@ define Package/libudev-zero/install
 	$(CP) $(PKG_INSTALL_DIR)/usr/lib/libudev.so* $(1)/usr/lib/
 endef
 
+define Package/libudev-zero-hotplug/install
+	$(INSTALL_DIR) $(1)/usr/sbin
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/contrib/uevent-rebroadcast $(1)/usr/sbin/
+	$(INSTALL_DIR) $(1)/etc/hotplug.d/input
+	$(INSTALL_DATA) ./files/uevent-rebroadcast.hotplug \
+		$(1)/etc/hotplug.d/input/99-uevent-rebroadcast
+	$(INSTALL_DIR) $(1)/etc/hotplug.d/drm
+	$(INSTALL_DATA) ./files/uevent-rebroadcast.hotplug \
+		$(1)/etc/hotplug.d/drm/99-uevent-rebroadcast
+endef
+
 $(eval $(call BuildPackage,libudev-zero))
+$(eval $(call BuildPackage,libudev-zero-hotplug))
