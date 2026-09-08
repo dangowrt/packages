@@ -1,0 +1,24 @@
+# Rebroadcast kernel uevents to netlink group 0x4 for libudev-zero monitors.
+#
+# libudev-zero's udev_monitor deliberately does NOT listen to the kernel's
+# uevent netlink group: it expects the system's hotplug manager to
+# rebroadcast events to group 0x4 once device setup is done (see contrib/
+# upstream). On OpenWrt that manager is procd, so this hotplug.d script
+# (installed for the subsystems that matter to libudev consumers: input for
+# device hotplug, drm for display/HDMI hotplug) forwards each event via the
+# contrib helper, which serializes its environment into a uevent message.
+# Without this, e.g. Kodi/libinput only ever sees input devices that were
+# present at startup - a Bluetooth remote connecting later is invisible.
+#
+# LOOP GUARD: procd receives our own group-0x4 messages as well and runs
+# this script again for them. The marker variable travels inside the
+# rebroadcast message, so the second pass is a no-op - one kernel event
+# results in exactly one rebroadcast (without this, the feedback loop
+# floods the system with thousands of events per second).
+[ "$LIBUDEV_ZERO_REBROADCAST" = "1" ] && return 0
+export LIBUDEV_ZERO_REBROADCAST=1
+
+# libudev-zero's uevent parser requires SEQNUM; make sure it is present
+[ -n "$SEQNUM" ] || export SEQNUM="$(cat /sys/kernel/uevent_seqnum 2>/dev/null || echo 1)"
+
+/usr/sbin/uevent-rebroadcast
