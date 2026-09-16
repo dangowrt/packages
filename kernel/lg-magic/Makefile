@@ -26,13 +26,32 @@ define KernelPackage/hid-lg-magic
 endef
 
 define KernelPackage/hid-lg-magic/description
-  HID driver for the LG Magic Remote (MR20) paired over Bluetooth. It
+  HID driver for the LG Magic Remote (MR2x) paired over Bluetooth. It
   maps the remote's buttons, turns the gyroscope into an air mouse and
   can expose the raw IMU data as a separate input device.
+endef
+
+define Package/lg-magic-scripts
+  SECTION:=utils
+  CATEGORY:=Utilities
+  TITLE:=LG Magic Remote calibration scripts
+  DEPENDS:=+kmod-hid-lg-magic +python3-evdev
+endef
+
+define KernelPackage/lg-magic-scripts/description
+  Scripts to calibrate the LG Magic Remote air-mouse.
 endef
 
 define Build/Compile
 	$(KERNEL_MAKE) M="$(PKG_BUILD_DIR)/kernel" modules
 endef
 
+define Package/lg-magic-scripts/install
+	mkdir -p $(1)/usr/sbin
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/scripts/calibrate.py $(1)/usr/sbin/lg-magic-calibrate.py
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/scripts/convert_calib.py $(1)/usr/sbin/lg-magic-convert_calib.py
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/scripts/display_imu.py $(1)/usr/sbin/display_imu.py
+endef
+
 $(eval $(call KernelPackage,hid-lg-magic))
+$(eval $(call BuildPackage,lg-magic-scripts))
