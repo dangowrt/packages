@@ -1,0 +1,56 @@
+From 282a4f14616bcf0ae3be3a5fe02a26092d881afb Mon Sep 17 00:00:00 2001
+From: Daniel Golle <daniel@makrotopia.org>
+Date: Wed, 16 Sep 2026 01:02:26 +0100
+Subject: [PATCH 2/2] provide the LFS64 aliases dropped by musl 1.2.4
+
+musl used to export the _LARGEFILE64_SOURCE aliases as ABI symbols and
+stopped with 1.2.4, so glibc binaries that import them no longer load:
+the Widevine CDM, for one, needs fopen64 and mmap64. Both are plain
+aliases where off_t is already 64 bits wide, so define them here.
+
+Signed-off-by: Daniel Golle <daniel@makrotopia.org>
+---
+ libgcompat/stdio.c  | 4 ++++
+ libgcompat/unistd.c | 7 +++++++
+ 2 files changed, 11 insertions(+)
+
+--- a/libgcompat/stdio.c
++++ b/libgcompat/stdio.c
+@@ -8,6 +8,8 @@
+ #include <stdio.h>  /* feof, fgets, fopen, fread, puts, v*printf */
+ #include <string.h> /* strcmp */
+ 
++#include "alias.h" /* alias */
++
+ int __vasprintf_chk(char **strp, int flag, const char *format, va_list ap);
+ int __vfprintf_chk(FILE *stream, int flag, const char *format, va_list ap);
+ int __vsnprintf_chk(char *s, size_t n, int flag, size_t slen,
+@@ -107,6 +109,8 @@ FILE *fopen(const char *restrict pathnam
+ 	return real_fopen(pathname, mode);
+ }
+ 
++alias(fopen, fopen64);
++
+ /**
+  * Convert formatted output, with stack checking.
+  *
+--- a/libgcompat/unistd.c
++++ b/libgcompat/unistd.c
+@@ -9,6 +9,7 @@
+ #include <stdlib.h> /* calloc */
+ #include <dlfcn.h>  /* dlsym */
+ #include <string.h> /* strcmp */
++#include <sys/mman.h> /* mmap */
+ 
+ #include "alias.h" /* alias */
+ 
+@@ -264,3 +265,9 @@ int fcntl64(int fd, int cmd, ...)
+ 
+ 	return fcntl(fd, cmd, arg);
+ }
++
++void *mmap64(void *addr, size_t length, int prot, int flags, int fd,
++             off_t offset)
++{
++	return mmap(addr, length, prot, flags, fd, offset);
++}

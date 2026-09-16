@@ -1,0 +1,37 @@
+From 46376e240d664c60c488c9dd1ddcac14cae17fa2 Mon Sep 17 00:00:00 2001
+From: Daniel Golle <daniel@makrotopia.org>
+Date: Wed, 16 Sep 2026 01:02:09 +0100
+Subject: [PATCH 1/2] unistd: pass the variadic argument through fcntl64
+
+fcntl64() handed its va_list to fcntl(3) as the third argument instead
+of the value it holds, so every command taking an argument received
+garbage: on aarch64 a va_list is a structure, and fcntl(3) reads a
+single word from its own argument list. Read the argument and forward
+that.
+
+Signed-off-by: Daniel Golle <daniel@makrotopia.org>
+---
+ libgcompat/unistd.c | 9 +++++----
+ 1 file changed, 5 insertions(+), 4 deletions(-)
+
+--- a/libgcompat/unistd.c
++++ b/libgcompat/unistd.c
+@@ -253,13 +253,14 @@ int __close(int fd)
+ 	return close(fd);
+ }
+ 
+-int fcntl64(int fd, int cmd, ...) {
+-	int ret;
++int fcntl64(int fd, int cmd, ...)
++{
++	unsigned long arg;
+ 	va_list va;
+ 
+ 	va_start(va, cmd);
+-	ret = fcntl(fd, cmd, va);
++	arg = va_arg(va, unsigned long);
+ 	va_end(va);
+ 
+-	return ret;
++	return fcntl(fd, cmd, arg);
+ }
