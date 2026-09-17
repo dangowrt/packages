@@ -1,0 +1,84 @@
+From 901c2d5aea6907bd22ea36764fa94b6cd9cb88a3 Mon Sep 17 00:00:00 2001
+From: Daniel Golle <daniel@makrotopia.org>
+Date: Thu, 17 Sep 2026 17:10:56 +0100
+Subject: [PATCH] module-rt: fail rtkit_get_bus() when no bus was obtained
+
+rtkit_get_bus() builds its return value from errno at a point where
+nothing in the function is guaranteed to have set it. With
+rtportal.enabled = false and rtkit.enabled = false neither bus is ever
+contacted, so errno still holds whatever an unrelated earlier libc call
+left there. When that happens to be 0, the function reports success
+while impl->rtkit_bus, service_name, object_path and interface are all
+still NULL, and pipewire__module_init() goes on to start the RTKit
+thread loop. do_rtkit_setup() then hands the NULL interface name to
+dbus_message_append_args() and the client dies: SIGSEGV in strlen() on a
+D-Bus built with -Dchecks=false, SIGABRT on a checked one.
+
+Record the error of each bus attempt where it happens and start from
+-ENOTSUP, so the case where neither bus is enabled reports a failure
+too. Print that error in the warning instead of %m, which was as
+unreliable as the return value.
+
+Signed-off-by: Daniel Golle <daniel@makrotopia.org>
+---
+ src/modules/module-rt.c | 20 +++++++++++++-------
+ 1 file changed, 13 insertions(+), 7 deletions(-)
+
+diff --git a/src/modules/module-rt.c b/src/modules/module-rt.c
+index a090bfd8a..2ddefca2a 100644
+--- a/src/modules/module-rt.c
++++ b/src/modules/module-rt.c
+@@ -938,15 +938,18 @@ static bool check_rtkit(struct pw_context *context)
+ 
+ static int rtkit_get_bus(struct impl *impl)
+ {
+-	int res;
++	int res = -ENOTSUP;
+ 
+ 	pw_log_debug("enter rtkit get bus");
+ 
+ 	/* Checking xdg-desktop-portal. It works fine in all situations. */
+-	if (impl->rtportal_enabled)
++	if (impl->rtportal_enabled) {
+ 		impl->rtkit_bus = pw_rtkit_bus_get_session();
+-	else
++		if (impl->rtkit_bus == NULL)
++			res = -errno;
++	} else {
+ 		pw_log_info("Portal Realtime disabled");
++	}
+ 
+ 	if (impl->rtkit_bus != NULL) {
+ 		if (pw_rtkit_check_xdg_portal(impl->rtkit_bus)) {
+@@ -961,19 +964,22 @@ static int rtkit_get_bus(struct impl *impl)
+ 	}
+ 	/* Failed to get xdg-desktop-portal, try to use rtkit. */
+ 	if (impl->rtkit_bus == NULL) {
+-		if (impl->rtkit_enabled)
++		if (impl->rtkit_enabled) {
+ 			impl->rtkit_bus = pw_rtkit_bus_get_system();
+-		else
++			if (impl->rtkit_bus == NULL)
++				res = -errno;
++		} else {
+ 			pw_log_info("RTkit disabled");
++		}
+ 
+ 		if (impl->rtkit_bus != NULL) {
+ 			impl->service_name = RTKIT_SERVICE_NAME;
+ 			impl->object_path = RTKIT_OBJECT_PATH;
+ 			impl->interface = RTKIT_INTERFACE;
+ 		} else {
+-			res = -errno;
+ 			pw_log_warn("Realtime scheduling disabled: insufficient realtime privileges, "
+-				"Portal not found on session bus, and no system bus for RTKit: %m");
++				"Portal not found on session bus, and no system bus for RTKit: %s",
++				spa_strerror(res));
+ 			return res;
+ 		}
+ 	}
+
+base-commit: 8fa27cabdc6c0c1350c69c026af5850ef0af1e26
+-- 
+2.55.0
+
