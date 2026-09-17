@@ -35,11 +35,15 @@ define Package/lg-magic-scripts
   SECTION:=utils
   CATEGORY:=Utilities
   TITLE:=LG Magic Remote calibration scripts
-  DEPENDS:=+kmod-hid-lg-magic +python3-evdev
+  DEPENDS:=+kmod-hid-lg-magic +python3-light
 endef
 
-define KernelPackage/lg-magic-scripts/description
-  Scripts to calibrate the LG Magic Remote air-mouse.
+define Package/lg-magic-scripts/description
+  Scripts to calibrate the LG Magic Remote air-mouse: capture raw IMU
+  samples from the remote, average the gyroscope bias out of them and
+  pack the result into the binary blob the driver loads as firmware.
+  The accelerometer fit additionally wants numpy and scipy, which the
+  gyroscope calibration the driver needs does not.
 endef
 
 define Build/Compile
@@ -47,10 +51,10 @@ define Build/Compile
 endef
 
 define Package/lg-magic-scripts/install
-	mkdir -p $(1)/usr/sbin
+	$(INSTALL_DIR) $(1)/usr/sbin
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/scripts/calibrate.py $(1)/usr/sbin/lg-magic-calibrate.py
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/scripts/convert_calib.py $(1)/usr/sbin/lg-magic-convert_calib.py
-	$(INSTALL_BIN) $(PKG_BUILD_DIR)/scripts/display_imu.py $(1)/usr/sbin/display_imu.py
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/scripts/display_imu.py $(1)/usr/sbin/lg-magic-display_imu.py
 endef
 
 $(eval $(call KernelPackage,hid-lg-magic))
