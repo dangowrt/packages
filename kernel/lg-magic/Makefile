@@ -55,6 +55,7 @@ define Package/lg-magic-scripts/install
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/scripts/calibrate.py $(1)/usr/sbin/lg-magic-calibrate.py
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/scripts/convert_calib.py $(1)/usr/sbin/lg-magic-convert_calib.py
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/scripts/display_imu.py $(1)/usr/sbin/lg-magic-display_imu.py
+	$(INSTALL_BIN) ./files/lg-magic-calibration $(1)/usr/sbin/lg-magic-calibration
 endef
 
 $(eval $(call KernelPackage,hid-lg-magic))
