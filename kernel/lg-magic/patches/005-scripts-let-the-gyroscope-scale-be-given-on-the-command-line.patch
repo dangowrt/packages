@@ -14,8 +14,6 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  scripts/calibrate.py | 10 ++++++----
  1 file changed, 6 insertions(+), 4 deletions(-)
 
-diff --git a/scripts/calibrate.py b/scripts/calibrate.py
-index 94a9b35..a9ddd55 100755
 --- a/scripts/calibrate.py
 +++ b/scripts/calibrate.py
 @@ -22,7 +22,7 @@ def load_imu_csv(filename):
@@ -27,7 +25,7 @@ index 94a9b35..a9ddd55 100755
      bias_list = [float(f"{v:.6f}") for v in bias]
      matrix_list = [[float(f"{v:.6f}") for v in row] for row in matrix]
      calib_dict = {
-@@ -30,10 +30,9 @@ def save_calibration_json(filename, bias=(), matrix=(), gyro_bias=(0,0,0)):
+@@ -30,10 +30,9 @@ def save_calibration_json(filename, bias
          "bias": bias_list,
          "matrix": matrix_list
          },
@@ -58,6 +56,3 @@ index 94a9b35..a9ddd55 100755
          else:
              print("You need to select --accel or --gyro")
      except Exception as e:
--- 
-2.55.0
-
