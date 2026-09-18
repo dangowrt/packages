@@ -6,7 +6,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=libudev-zero
 PKG_VERSION:=1.0.5
-PKG_RELEASE:=3
+PKG_RELEASE:=4
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_URL:=https://codeload.github.com/illiliti/libudev-zero/tar.gz/$(PKG_VERSION)?
@@ -45,8 +45,10 @@ define Package/libudev-zero-hotplug/description
  libudev monitor is deaf and applications only see devices present at
  startup (e.g. Kodi/libinput never noticing a Bluetooth remote that
  connects while running). This package provides upstream's contrib helper
- (env -> netlink 0x4) wired into procd via /etc/hotplug.d/ for the input
- and drm subsystems (input device hotplug + display/HDMI hotplug). The
+ (env -> netlink 0x4) wired into procd via /etc/hotplug.d/ for the input,
+ drm and sound subsystems (input device hotplug, display/HDMI hotplug and
+ sound card hotplug, the last one letting PipeWire's ALSA monitor pick up a
+ USB audio device as it is plugged rather than only at startup). The
  hotplug scripts carry a marker through the rebroadcast to stop procd from
  amplifying our own messages into an event storm (procd receives group-0x4
  messages too).
@@ -87,6 +89,9 @@ define Package/libudev-zero-hotplug/install
 	$(INSTALL_DIR) $(1)/etc/hotplug.d/drm
 	$(INSTALL_DATA) ./files/uevent-rebroadcast.hotplug \
 		$(1)/etc/hotplug.d/drm/99-uevent-rebroadcast
+	$(INSTALL_DIR) $(1)/etc/hotplug.d/sound
+	$(INSTALL_DATA) ./files/uevent-rebroadcast.hotplug \
+		$(1)/etc/hotplug.d/sound/99-uevent-rebroadcast
 endef
 
 $(eval $(call BuildPackage,libudev-zero))
