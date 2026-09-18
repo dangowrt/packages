@@ -5,10 +5,12 @@
 # rebroadcast events to group 0x4 once device setup is done (see contrib/
 # upstream). On OpenWrt that manager is procd, so this hotplug.d script
 # (installed for the subsystems that matter to libudev consumers: input for
-# device hotplug, drm for display/HDMI hotplug) forwards each event via the
-# contrib helper, which serializes its environment into a uevent message.
-# Without this, e.g. Kodi/libinput only ever sees input devices that were
-# present at startup - a Bluetooth remote connecting later is invisible.
+# device hotplug, drm for display/HDMI hotplug, sound for cards appearing and
+# going away) forwards each event via the contrib helper, which serializes its
+# environment into a uevent message. Without this, e.g. Kodi/libinput only ever
+# sees input devices that were present at startup - a Bluetooth remote
+# connecting later is invisible - and PipeWire's ALSA monitor never notices a
+# USB sound card being plugged in.
 #
 # LOOP GUARD: procd receives our own group-0x4 messages as well and runs
 # this script again for them. The marker variable travels inside the
