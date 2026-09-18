@@ -4,7 +4,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=pipewire
 PKG_VERSION:=1.6.8
-PKG_RELEASE:=4
+PKG_RELEASE:=5
 
 PKG_SOURCE_PROTO:=git
 PKG_SOURCE_URL:=https://gitlab.freedesktop.org/pipewire/pipewire.git
@@ -56,6 +56,7 @@ define Package/pipewire
 	+PIPEWIRE_ALSA:alsa-lib \
 	+PIPEWIRE_PULSE_TUNNEL:libpulse \
 	+PIPEWIRE_UDEV:libudev-zero \
+	+PIPEWIRE_UDEV:libudev-zero-hotplug \
 	+PIPEWIRE_DBUS:libdbus \
 	+PIPEWIRE_BLUETOOTH:bluez-libs \
 	+PIPEWIRE_BLUETOOTH:libusb-1.0 \
@@ -130,7 +131,11 @@ config PIPEWIRE_UDEV
 	bool "udev device hotplug detection"
 	default y
 	help
-		Auto-detect ALSA cards via udev. Pulls libudev-zero.
+		Auto-detect ALSA cards via udev, as they are plugged
+		rather than only at startup. Pulls libudev-zero and its
+		uevent rebroadcaster, without which libudev-zero's
+		monitor never receives an event and the ALSA monitor
+		only ever sees the cards present when it started.
 
 config PIPEWIRE_DBUS
 	bool "D-Bus support (rtkit / device reservation)"
@@ -398,11 +403,6 @@ define Package/pipewire/install
 
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./files/pipewire.init $(1)/etc/init.d/pipewire
-
-	# hotplug hook: restart the stack when a sound card comes/goes (the
-	# udev-less ALSA setup only creates static nodes at startup)
-	$(INSTALL_DIR) $(1)/etc/hotplug.d/sound
-	$(INSTALL_DATA) ./files/pipewire-hotplug $(1)/etc/hotplug.d/sound/20-pipewire
 
 	# pipewire-pulse (PulseAudio-compatible server) is optional
 	$(if $(CONFIG_PIPEWIRE_PULSE),$(CP) $(PKG_INSTALL_DIR)/usr/bin/pipewire-pulse $(1)/usr/bin/)
