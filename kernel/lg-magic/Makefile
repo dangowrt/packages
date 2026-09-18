@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 include $(INCLUDE_DIR)/kernel.mk
 
 PKG_NAME:=lg-magic
-PKG_RELEASE:=2
+PKG_RELEASE:=3
 
 PKG_SOURCE_PROTO:=git
 PKG_SOURCE_URL:=https://github.com/brainrom/lg-magic.git
@@ -46,8 +46,36 @@ define Package/lg-magic-scripts/description
   gyroscope calibration the driver needs does not.
 endef
 
+define Package/lg-magic-voice
+  SECTION:=sound
+  CATEGORY:=Sound
+  TITLE:=LG Magic Remote microphone bridge
+  URL:=https://github.com/brainrom/lg-magic
+  DEPENDS:=+kmod-hid-lg-magic +pipewire +sbc
+endef
+
+define Package/lg-magic-voice/description
+  Publishes the microphone of an LG Magic Remote as a PipeWire source.
+  The remote sends nothing until a host arms it, so the bridge drives the
+  vendor command channel on the remote's hidraw node, decodes the mSBC
+  frames it then receives and hands the resulting 16 kHz mono audio to
+  PipeWire. By default the stream is armed while the microphone key is
+  held; see /etc/config/lg-magic for the other policies.
+endef
+
+define Package/lg-magic-voice/conffiles
+/etc/config/lg-magic
+endef
+
 define Build/Compile
 	$(KERNEL_MAKE) M="$(PKG_BUILD_DIR)/kernel" modules
+ifneq ($(CONFIG_PACKAGE_lg-magic-voice),)
+	$(MAKE) -C $(PKG_BUILD_DIR)/voice \
+		CC="$(TARGET_CC)" \
+		PKG_CONFIG="$(PKG_CONFIG)" \
+		CFLAGS="$(TARGET_CFLAGS) $(TARGET_CPPFLAGS)" \
+		LDFLAGS="$(TARGET_LDFLAGS)"
+endif
 endef
 
 define Package/lg-magic-scripts/install
@@ -58,5 +86,17 @@ define Package/lg-magic-scripts/install
 	$(INSTALL_BIN) ./files/lg-magic-calibration $(1)/usr/sbin/lg-magic-calibration
 endef
 
+define Package/lg-magic-voice/install
+	$(MAKE) -C $(PKG_BUILD_DIR)/voice install-bin \
+		DESTDIR="$(1)" BINDIR=/usr/bin
+	$(INSTALL_DIR) $(1)/etc/init.d
+	$(INSTALL_BIN) ./files/lg-magic-voice.init $(1)/etc/init.d/lg-magic-voice
+	$(INSTALL_DIR) $(1)/etc/config
+	$(INSTALL_CONF) ./files/lg-magic-voice.config $(1)/etc/config/lg-magic
+	$(INSTALL_DIR) $(1)/etc/hotplug.d/hidraw
+	$(INSTALL_DATA) ./files/lg-magic-voice.hotplug $(1)/etc/hotplug.d/hidraw/10-lg-magic-voice
+endef
+
 $(eval $(call KernelPackage,hid-lg-magic))
 $(eval $(call BuildPackage,lg-magic-scripts))
+$(eval $(call BuildPackage,lg-magic-voice))
