@@ -1,4 +1,4 @@
-From ea652d70f6da5db213fd4b92f1b11506e457a793 Mon Sep 17 00:00:00 2001
+From 7c2e3345049c6a54efb10ebacca7f6ca88e3ca25 Mon Sep 17 00:00:00 2001
 From: Daniel Golle <daniel@makrotopia.org>
 Date: Fri, 18 Sep 2026 08:50:05 +0100
 Subject: [PATCH 07/10] lg_magic: talk to the remote on the vendor command
@@ -26,22 +26,23 @@ belong to the previous frame and are dropped. An MR22 answers 0x17 with
 
 Signed-off-by: Daniel Golle <daniel@makrotopia.org>
 ---
- kernel/lg_magic_main.c | 223 +++++++++++++++++++++++++++++++++++++++++
- 1 file changed, 223 insertions(+)
+ kernel/lg_magic_main.c | 252 +++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 252 insertions(+)
 
 --- a/kernel/lg_magic_main.c
 +++ b/kernel/lg_magic_main.c
-@@ -18,6 +18,9 @@
+@@ -18,6 +18,10 @@
  #include <linux/hid.h>
  #include <linux/input.h>
  #include <linux/firmware.h>
 +#include <linux/ctype.h>
 +#include <linux/spinlock.h>
 +#include <linux/sysfs.h>
++#include <linux/workqueue.h>
  
  #include "lg_magic_airmouse.h"
  
-@@ -53,10 +56,26 @@ static int power_key = 0;
+@@ -53,9 +57,28 @@ static int power_key = 0;
  module_param(power_key, int, 0644);
  MODULE_PARM_DESC(power_key, "Report code 0x8000 as KEY_POWER instead of KEY_CHANNELUP");
  
@@ -55,7 +56,10 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  struct lgmagic_drvdata {
  	struct input_dev *input_hid;
  	struct input_dev *input_imu;
- 
++	struct hid_device *hdev;
++	struct work_struct startup;
++	bool started;
++
 +	spinlock_t lock;
 +	char fw_ver[LGMAGIC_FW_VER_MAX];
 +	u8 scd[LGMAGIC_SCD_MAX];
@@ -64,11 +68,10 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
 +	u8 fw_major;
 +	u8 fw_zone;
 +	u8 battery;
-+
+ 
  	u16 last_keycode;
  	u16 last_btncode;
- 	s64 gyro_acc[3];
-@@ -64,11 +83,20 @@ struct lgmagic_drvdata {
+@@ -64,11 +87,20 @@ struct lgmagic_drvdata {
  	struct lg_magic_airmouse_calib calib;
  };
  
@@ -89,7 +92,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  #define LGMAGIC_CODE_CHANNELUP 0x8000
  #define LGMAGIC_CODE_WHEEL 0x8044
  #define LGMAGIC_CODE_VOICE_START 0x800A
-@@ -130,6 +158,94 @@ static const struct {
+@@ -130,6 +162,94 @@ static const struct {
  	{ 0x8007, KEY_LEFT },
  };
  
@@ -184,10 +187,15 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  static bool lgmagic_code_is_control(u16 code)
  {
  	return code == LGMAGIC_CODE_VOICE_START ||
-@@ -158,6 +274,12 @@ static int lgmagic_raw_event(struct hid_
+@@ -158,6 +278,17 @@ static int lgmagic_raw_event(struct hid_
  	if (size < 1)
  		return 0;
  
++	if (!drvdata->started) {
++		drvdata->started = true;
++		schedule_work(&drvdata->startup);
++	}
++
 +	if (data[0] == LGMAGIC_REPORT_CMD)
 +	{
 +		lgmagic_cmd_response(hdev, data, size);
@@ -197,7 +205,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  	if (size != LGMAGIC_MOTION_SIZE || data[0] != LGMAGIC_REPORT_MOTION)
  	{
  		lgmagic_dev_dbg(&hdev->dev, "Ignored report with size %d and type %x", size, data[0]);
-@@ -171,6 +293,8 @@ static int lgmagic_raw_event(struct hid_
+@@ -171,6 +302,8 @@ static int lgmagic_raw_event(struct hid_
  	/* Parse counter (little-endian) */
  	counter = data[1] | (data[2] << 8);
  
@@ -206,7 +214,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  	/* Parse 6 signed 16-bit values, big-endian */
  	for (i = 0; i < 6; i++) {
  		imu[i] = (data[5 + 2*i] << 8) | data[6 + 2*i];
-@@ -257,6 +381,85 @@ static int lgmagic_raw_event(struct hid_
+@@ -257,6 +390,97 @@ static int lgmagic_raw_event(struct hid_
  	return 0;
  }
  
@@ -289,18 +297,32 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
 +		lgmagic_cmd_send(hdev, LGMAGIC_CMD_MOTION_ON);
 +}
 +
++/* A command issued as probe ends is answered about half the time. The
++ * remote's first report proves the link carries traffic, so repeat there.
++ */
++static void lgmagic_startup_work(struct work_struct *work)
++{
++	struct lgmagic_drvdata *drvdata;
++
++	drvdata = container_of(work, struct lgmagic_drvdata, startup);
++
++	lgmagic_startup_commands(drvdata->hdev);
++}
++
  static void lgmagic_sanitize_mac(const char *uniq, char *out)
  {
  	size_t i = 0;
-@@ -298,6 +501,7 @@ static int lgmagic_probe(struct hid_devi
+@@ -298,6 +522,9 @@ static int lgmagic_probe(struct hid_devi
  		return -ENOMEM;
  
  	hid_set_drvdata(hdev, drvdata);
++	drvdata->hdev = hdev;
++	INIT_WORK(&drvdata->startup, lgmagic_startup_work);
 +	spin_lock_init(&drvdata->lock);
  
  	ret = hid_parse(hdev);
  	if (ret)
-@@ -368,6 +572,12 @@ loaded:
+@@ -368,14 +595,35 @@ loaded:
  			return ret;
  	}
  
@@ -313,13 +335,20 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  	return 0;
  }
  
-@@ -376,6 +586,15 @@ static void lgmagic_remove(struct hid_de
+ static void lgmagic_remove(struct hid_device *hdev)
+ {
++	struct lgmagic_drvdata *drvdata = hid_get_drvdata(hdev);
++
++	cancel_work_sync(&drvdata->startup);
  	hid_hw_stop(hdev);
  }
  
 +#ifdef CONFIG_PM
 +static int lgmagic_resume(struct hid_device *hdev)
 +{
++	struct lgmagic_drvdata *drvdata = hid_get_drvdata(hdev);
++
++	drvdata->started = false;
 +	lgmagic_startup_commands(hdev);
 +
 +	return 0;
@@ -329,7 +358,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  static const struct hid_device_id lgmagic_devices[] = {
  	{ HID_BLUETOOTH_DEVICE(0x000f, 0x3412) }, // LG Magic Remote
  	{ }
-@@ -388,6 +607,10 @@ static struct hid_driver lgmagic_driver
+@@ -388,6 +636,10 @@ static struct hid_driver lgmagic_driver
  	.raw_event = lgmagic_raw_event,
  	.probe = lgmagic_probe,
  	.remove = lgmagic_remove,
