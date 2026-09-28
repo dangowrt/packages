@@ -1,7 +1,7 @@
-From 17b48fd979c762e973321b0a52d820a2eec7a39e Mon Sep 17 00:00:00 2001
+From ea652d70f6da5db213fd4b92f1b11506e457a793 Mon Sep 17 00:00:00 2001
 From: Daniel Golle <daniel@makrotopia.org>
 Date: Fri, 18 Sep 2026 08:50:05 +0100
-Subject: [PATCH 4/6] lg_magic: talk to the remote on the vendor command
+Subject: [PATCH 07/10] lg_magic: talk to the remote on the vendor command
  channel
 
 The remote does not stream motion samples until the host asks for it,
@@ -11,19 +11,23 @@ enabled. Send the motion-active opcode at probe and after resume.
 
 Ask for the firmware version and the sensor calibration blob at the same
 time and expose what comes back, together with the battery level carried
-in the upper six bits of report byte 3, through sysfs. Only the chunk
-index and the more-chunks flag of the calibration response have a
-published meaning, so the payload is concatenated in arrival order and
-handed over unparsed rather than guessed at.
+in the upper six bits of report byte 3, through sysfs.
 
-Commands go out as output reports, falling back to a feature report,
-because LG's own TV uses one route in its input daemon and the other in
-its voice daemon and the remote declares 0xF9 in both directions.
+Commands go out as a two-byte SET_REPORT on the F9 feature report, which
+is the only route the remote accepts: it declares no output report, so
+an output report is taken by the transport and then dropped. An output
+report is kept as a fallback for remotes that do declare one.
+
+A calibration response arrives as F9 frames of 155 bytes with a
+more-follows flag in byte 2 and the count of valid payload bytes in byte
+3. The remote reuses one transmit buffer, so the bytes past that count
+belong to the previous frame and are dropped. An MR22 answers 0x17 with
+150 then 110 bytes, and does not answer 0x11 at all.
 
 Signed-off-by: Daniel Golle <daniel@makrotopia.org>
 ---
- kernel/lg_magic_main.c | 218 +++++++++++++++++++++++++++++++++++++++++
- 1 file changed, 218 insertions(+)
+ kernel/lg_magic_main.c | 223 +++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 223 insertions(+)
 
 --- a/kernel/lg_magic_main.c
 +++ b/kernel/lg_magic_main.c
@@ -37,7 +41,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  
  #include "lg_magic_airmouse.h"
  
-@@ -53,10 +56,25 @@ static int power_key = 0;
+@@ -53,10 +56,26 @@ static int power_key = 0;
  module_param(power_key, int, 0644);
  MODULE_PARM_DESC(power_key, "Report code 0x8000 as KEY_POWER instead of KEY_CHANNELUP");
  
@@ -45,7 +49,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
 +module_param(motion, int, 0644);
 +MODULE_PARM_DESC(motion, "Ask the remote to stream motion samples");
 +
-+#define LGMAGIC_SCD_MAX 256
++#define LGMAGIC_SCD_MAX 512
 +#define LGMAGIC_FW_VER_MAX 32
 +
  struct lgmagic_drvdata {
@@ -56,6 +60,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
 +	char fw_ver[LGMAGIC_FW_VER_MAX];
 +	u8 scd[LGMAGIC_SCD_MAX];
 +	size_t scd_len;
++	bool scd_done;
 +	u8 fw_major;
 +	u8 fw_zone;
 +	u8 battery;
@@ -63,7 +68,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  	u16 last_keycode;
  	u16 last_btncode;
  	s64 gyro_acc[3];
-@@ -64,11 +82,20 @@ struct lgmagic_drvdata {
+@@ -64,11 +83,20 @@ struct lgmagic_drvdata {
  	struct lg_magic_airmouse_calib calib;
  };
  
@@ -84,7 +89,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  #define LGMAGIC_CODE_CHANNELUP 0x8000
  #define LGMAGIC_CODE_WHEEL 0x8044
  #define LGMAGIC_CODE_VOICE_START 0x800A
-@@ -130,6 +157,90 @@ static const struct {
+@@ -130,6 +158,94 @@ static const struct {
  	{ 0x8007, KEY_LEFT },
  };
  
@@ -93,12 +98,12 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
 +	u8 buf[2] = { LGMAGIC_REPORT_CMD, opcode };
 +	int ret;
 +
-+	ret = hid_hw_output_report(hdev, buf, sizeof(buf));
++	ret = hid_hw_raw_request(hdev, buf[0], buf, sizeof(buf),
++				 HID_FEATURE_REPORT, HID_REQ_SET_REPORT);
 +	if (ret == sizeof(buf))
 +		return 0;
 +
-+	ret = hid_hw_raw_request(hdev, buf[0], buf, sizeof(buf),
-+				 HID_FEATURE_REPORT, HID_REQ_SET_REPORT);
++	ret = hid_hw_output_report(hdev, buf, sizeof(buf));
 +	if (ret == sizeof(buf))
 +		return 0;
 +
@@ -130,26 +135,30 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
 +			 data[3], drvdata->fw_ver);
 +}
 +
-+/* Only the chunk index and the more-chunks flag are known, so keep the rest raw. */
++/* The remote reuses one transmit buffer, so everything past data[3] bytes
++ * is the previous frame and must not be stored.
++ */
 +static void lgmagic_scd_chunk(struct hid_device *hdev, u8 *data, int size)
 +{
 +	struct lgmagic_drvdata *drvdata = hid_get_drvdata(hdev);
 +	unsigned long flags;
 +	size_t len;
 +
-+	if (size < 5)
++	if (size < 4)
 +		return;
 +
++	len = min_t(size_t, data[3], size - 4);
++
 +	spin_lock_irqsave(&drvdata->lock, flags);
-+	if (!data[2])
++	if (drvdata->scd_done)
 +		drvdata->scd_len = 0;
-+	len = min_t(size_t, size - 4, LGMAGIC_SCD_MAX - drvdata->scd_len);
++	drvdata->scd_done = !data[2];
++	len = min_t(size_t, len, LGMAGIC_SCD_MAX - drvdata->scd_len);
 +	memcpy(drvdata->scd + drvdata->scd_len, data + 4, len);
 +	drvdata->scd_len += len;
 +	spin_unlock_irqrestore(&drvdata->lock, flags);
 +
-+	lgmagic_dev_dbg(&hdev->dev, "SCD chunk %u, %zu bytes, more %u", data[2],
-+			len, data[3]);
++	lgmagic_dev_dbg(&hdev->dev, "SCD %zu bytes, more %u", len, data[2]);
 +}
 +
 +static void lgmagic_cmd_response(struct hid_device *hdev, u8 *data, int size)
@@ -175,7 +184,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  static bool lgmagic_code_is_control(u16 code)
  {
  	return code == LGMAGIC_CODE_VOICE_START ||
-@@ -158,6 +269,12 @@ static int lgmagic_raw_event(struct hid_
+@@ -158,6 +274,12 @@ static int lgmagic_raw_event(struct hid_
  	if (size < 1)
  		return 0;
  
@@ -188,7 +197,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  	if (size != LGMAGIC_MOTION_SIZE || data[0] != LGMAGIC_REPORT_MOTION)
  	{
  		lgmagic_dev_dbg(&hdev->dev, "Ignored report with size %d and type %x", size, data[0]);
-@@ -171,6 +288,8 @@ static int lgmagic_raw_event(struct hid_
+@@ -171,6 +293,8 @@ static int lgmagic_raw_event(struct hid_
  	/* Parse counter (little-endian) */
  	counter = data[1] | (data[2] << 8);
  
@@ -197,7 +206,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  	/* Parse 6 signed 16-bit values, big-endian */
  	for (i = 0; i < 6; i++) {
  		imu[i] = (data[5 + 2*i] << 8) | data[6 + 2*i];
-@@ -257,6 +376,85 @@ static int lgmagic_raw_event(struct hid_
+@@ -257,6 +381,85 @@ static int lgmagic_raw_event(struct hid_
  	return 0;
  }
  
@@ -283,7 +292,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  static void lgmagic_sanitize_mac(const char *uniq, char *out)
  {
  	size_t i = 0;
-@@ -298,6 +496,7 @@ static int lgmagic_probe(struct hid_devi
+@@ -298,6 +501,7 @@ static int lgmagic_probe(struct hid_devi
  		return -ENOMEM;
  
  	hid_set_drvdata(hdev, drvdata);
@@ -291,7 +300,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  
  	ret = hid_parse(hdev);
  	if (ret)
-@@ -368,6 +567,12 @@ loaded:
+@@ -368,6 +572,12 @@ loaded:
  			return ret;
  	}
  
@@ -304,7 +313,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  	return 0;
  }
  
-@@ -376,6 +581,15 @@ static void lgmagic_remove(struct hid_de
+@@ -376,6 +586,15 @@ static void lgmagic_remove(struct hid_de
  	hid_hw_stop(hdev);
  }
  
@@ -320,7 +329,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  static const struct hid_device_id lgmagic_devices[] = {
  	{ HID_BLUETOOTH_DEVICE(0x000f, 0x3412) }, // LG Magic Remote
  	{ }
-@@ -388,6 +602,10 @@ static struct hid_driver lgmagic_driver
+@@ -388,6 +607,10 @@ static struct hid_driver lgmagic_driver
  	.raw_event = lgmagic_raw_event,
  	.probe = lgmagic_probe,
  	.remove = lgmagic_remove,

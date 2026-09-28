@@ -1,13 +1,14 @@
-From 484a8fce253cd0441c48bccb99764b86e44f3e85 Mon Sep 17 00:00:00 2001
+From add68ea9805973c043fc79faf07a886d2f730f2b Mon Sep 17 00:00:00 2001
 From: Daniel Golle <daniel@makrotopia.org>
 Date: Fri, 18 Sep 2026 08:50:05 +0100
-Subject: [PATCH 5/6] voice: bridge the remote microphone into PipeWire
+Subject: [PATCH 08/10] voice: bridge the remote microphone into PipeWire
 
-The remote carries a microphone but sends nothing until the host writes
-the vendor command F9 03, after which it emits 124-byte reports at 66.7
-per second, each holding two 60-byte HFP wideband blocks: an H2 header
-and a 57-byte mSBC frame. That is a live 15 ms stream, so it belongs in
-an audio graph rather than in a file.
+The remote carries a microphone but sends nothing until the host sends
+the vendor command F9 03 as a two-byte SET_REPORT on the feature report,
+after which it emits 124-byte reports at 66.7 per second, each holding
+two 60-byte HFP wideband blocks: an H2 header and a 57-byte mSBC frame.
+That is a live 15 ms stream, so it belongs in an audio graph rather than
+in a file.
 
 Add a small daemon that reads the remote's hidraw node, arms and re-arms
 the stream, decodes the frames with libsbc and publishes a PipeWire
@@ -288,11 +289,11 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
 +
 +	voice->last_command = lgmagic_now_ms();
 +
-+	ret = write(voice->fd, buf, sizeof(buf));
-+	if (ret == (ssize_t)sizeof(buf))
++	if (ioctl(voice->fd, HIDIOCSFEATURE(sizeof(buf)), buf) >= 0)
 +		return 0;
 +
-+	if (ioctl(voice->fd, HIDIOCSFEATURE(sizeof(buf)), buf) >= 0)
++	ret = write(voice->fd, buf, sizeof(buf));
++	if (ret == (ssize_t)sizeof(buf))
 +		return 0;
 +
 +	fprintf(stderr, "lg-magic-voice: command %02x failed: %m\n", opcode);
