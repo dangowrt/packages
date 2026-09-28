@@ -1,4 +1,4 @@
-From 7c2e3345049c6a54efb10ebacca7f6ca88e3ca25 Mon Sep 17 00:00:00 2001
+From f1a68832865ac7b8f0d50ead45120dab03e9b666 Mon Sep 17 00:00:00 2001
 From: Daniel Golle <daniel@makrotopia.org>
 Date: Fri, 18 Sep 2026 08:50:05 +0100
 Subject: [PATCH 07/10] lg_magic: talk to the remote on the vendor command
@@ -26,23 +26,22 @@ belong to the previous frame and are dropped. An MR22 answers 0x17 with
 
 Signed-off-by: Daniel Golle <daniel@makrotopia.org>
 ---
- kernel/lg_magic_main.c | 252 +++++++++++++++++++++++++++++++++++++++++
- 1 file changed, 252 insertions(+)
+ kernel/lg_magic_main.c | 263 +++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 263 insertions(+)
 
 --- a/kernel/lg_magic_main.c
 +++ b/kernel/lg_magic_main.c
-@@ -18,6 +18,10 @@
+@@ -18,6 +18,9 @@
  #include <linux/hid.h>
  #include <linux/input.h>
  #include <linux/firmware.h>
-+#include <linux/ctype.h>
 +#include <linux/spinlock.h>
 +#include <linux/sysfs.h>
 +#include <linux/workqueue.h>
  
  #include "lg_magic_airmouse.h"
  
-@@ -53,9 +57,28 @@ static int power_key = 0;
+@@ -53,9 +56,29 @@ static int power_key = 0;
  module_param(power_key, int, 0644);
  MODULE_PARM_DESC(power_key, "Report code 0x8000 as KEY_POWER instead of KEY_CHANNELUP");
  
@@ -61,7 +60,8 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
 +	bool started;
 +
 +	spinlock_t lock;
-+	char fw_ver[LGMAGIC_FW_VER_MAX];
++	u8 fw_ver[LGMAGIC_FW_VER_MAX];
++	size_t fw_len;
 +	u8 scd[LGMAGIC_SCD_MAX];
 +	size_t scd_len;
 +	bool scd_done;
@@ -92,7 +92,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  #define LGMAGIC_CODE_CHANNELUP 0x8000
  #define LGMAGIC_CODE_WHEEL 0x8044
  #define LGMAGIC_CODE_VOICE_START 0x800A
-@@ -130,6 +162,94 @@ static const struct {
+@@ -130,6 +162,93 @@ static const struct {
  	{ 0x8007, KEY_LEFT },
  };
  
@@ -119,23 +119,22 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
 +{
 +	struct lgmagic_drvdata *drvdata = hid_get_drvdata(hdev);
 +	unsigned long flags;
-+	size_t len, i;
++	size_t len;
 +
 +	if (size < 4)
 +		return;
 +
-+	len = min_t(size_t, size - 4, LGMAGIC_FW_VER_MAX - 1);
++	len = min_t(size_t, size - 4, LGMAGIC_FW_VER_MAX);
 +
 +	spin_lock_irqsave(&drvdata->lock, flags);
 +	drvdata->fw_major = data[2];
 +	drvdata->fw_zone = data[3];
-+	for (i = 0; i < len; i++)
-+		drvdata->fw_ver[i] = isprint(data[4 + i]) ? data[4 + i] : '.';
-+	drvdata->fw_ver[len] = '\0';
++	memcpy(drvdata->fw_ver, data + 4, len);
++	drvdata->fw_len = len;
 +	spin_unlock_irqrestore(&drvdata->lock, flags);
 +
-+	lgmagic_dev_info(&hdev->dev, "Remote firmware %u zone %u: %s", data[2],
-+			 data[3], drvdata->fw_ver);
++	lgmagic_dev_info(&hdev->dev, "Remote firmware %u zone %u: %*ph", data[2],
++			 data[3], (int)len, data + 4);
 +}
 +
 +/* The remote reuses one transmit buffer, so everything past data[3] bytes
@@ -187,7 +186,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  static bool lgmagic_code_is_control(u16 code)
  {
  	return code == LGMAGIC_CODE_VOICE_START ||
-@@ -158,6 +278,17 @@ static int lgmagic_raw_event(struct hid_
+@@ -158,6 +277,17 @@ static int lgmagic_raw_event(struct hid_
  	if (size < 1)
  		return 0;
  
@@ -205,7 +204,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  	if (size != LGMAGIC_MOTION_SIZE || data[0] != LGMAGIC_REPORT_MOTION)
  	{
  		lgmagic_dev_dbg(&hdev->dev, "Ignored report with size %d and type %x", size, data[0]);
-@@ -171,6 +302,8 @@ static int lgmagic_raw_event(struct hid_
+@@ -171,6 +301,8 @@ static int lgmagic_raw_event(struct hid_
  	/* Parse counter (little-endian) */
  	counter = data[1] | (data[2] << 8);
  
@@ -214,7 +213,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  	/* Parse 6 signed 16-bit values, big-endian */
  	for (i = 0; i < 6; i++) {
  		imu[i] = (data[5 + 2*i] << 8) | data[6 + 2*i];
-@@ -257,6 +390,97 @@ static int lgmagic_raw_event(struct hid_
+@@ -257,6 +389,109 @@ static int lgmagic_raw_event(struct hid_
  	return 0;
  }
  
@@ -222,8 +221,20 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
 +			       struct device_attribute *attr, char *buf)
 +{
 +	struct lgmagic_drvdata *drvdata = hid_get_drvdata(to_hid_device(dev));
++	u8 fw_ver[LGMAGIC_FW_VER_MAX];
++	unsigned long flags;
++	size_t len, i;
++	int at = 0;
 +
-+	return sysfs_emit(buf, "%s\n", drvdata->fw_ver);
++	spin_lock_irqsave(&drvdata->lock, flags);
++	len = drvdata->fw_len;
++	memcpy(fw_ver, drvdata->fw_ver, len);
++	spin_unlock_irqrestore(&drvdata->lock, flags);
++
++	for (i = 0; i < len; i++)
++		at += sysfs_emit_at(buf, at, "%02x", fw_ver[i]);
++
++	return at + sysfs_emit_at(buf, at, "\n");
 +}
 +static DEVICE_ATTR_RO(fw_version);
 +
@@ -312,7 +323,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  static void lgmagic_sanitize_mac(const char *uniq, char *out)
  {
  	size_t i = 0;
-@@ -298,6 +522,9 @@ static int lgmagic_probe(struct hid_devi
+@@ -298,6 +533,9 @@ static int lgmagic_probe(struct hid_devi
  		return -ENOMEM;
  
  	hid_set_drvdata(hdev, drvdata);
@@ -322,7 +333,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  
  	ret = hid_parse(hdev);
  	if (ret)
-@@ -368,14 +595,35 @@ loaded:
+@@ -368,14 +606,35 @@ loaded:
  			return ret;
  	}
  
@@ -358,7 +369,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  static const struct hid_device_id lgmagic_devices[] = {
  	{ HID_BLUETOOTH_DEVICE(0x000f, 0x3412) }, // LG Magic Remote
  	{ }
-@@ -388,6 +636,10 @@ static struct hid_driver lgmagic_driver
+@@ -388,6 +647,10 @@ static struct hid_driver lgmagic_driver
  	.raw_event = lgmagic_raw_event,
  	.probe = lgmagic_probe,
  	.remove = lgmagic_remove,
