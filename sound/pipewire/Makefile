@@ -50,6 +50,7 @@ define Package/pipewire
   # Base deps are always needed; every optional feature adds its dep only when
   # the matching config symbol (Package/pipewire/config) is set.
   DEPENDS:= \
+	audio-support \
 	+libatomic \
 	+libstdcpp \
 	+glib2 \
@@ -69,7 +70,7 @@ define Package/pipewire
 	+PIPEWIRE_AVAHI:libavahi-client \
 	+PIPEWIRE_FFMPEG:ffmpeg \
 	+PIPEWIRE_SNDFILE:libsndfile
-  USERID:=pipewire:pipewire
+  USERID:=pipewire:pipewire:audio=29,audio-capture=32
 endef
 
 define Package/pipewire/description
