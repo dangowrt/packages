@@ -4,7 +4,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=pipewire
 PKG_VERSION:=1.6.8
-PKG_RELEASE:=5
+PKG_RELEASE:=6
 
 PKG_SOURCE_PROTO:=git
 PKG_SOURCE_URL:=https://gitlab.freedesktop.org/pipewire/pipewire.git
@@ -70,7 +70,7 @@ define Package/pipewire
 	+PIPEWIRE_AVAHI:libavahi-client \
 	+PIPEWIRE_FFMPEG:ffmpeg \
 	+PIPEWIRE_SNDFILE:libsndfile
-  USERID:=pipewire:pipewire:audio=29,audio-capture=32
+  USERID:=pipewire:pipewire:audio=29,audio-capture=32,video-capture=36
 endef
 
 define Package/pipewire/description
