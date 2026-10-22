@@ -6,7 +6,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=gcompat
-PKG_RELEASE:=1
+PKG_RELEASE:=2
 
 PKG_SOURCE_PROTO:=git
 PKG_SOURCE_URL:=https://git.adelielinux.org/adelie/gcompat.git
@@ -53,6 +53,10 @@ define Package/gcompat/description
   its dependency list. Upstream installs a loader stub there instead, which
   additionally lets whole glibc executables run; that stub needs a static
   PIE and musl's static library is not built as position-independent code.
+
+  On aarch64, preloading libgcompat-ifunc.so.0 into the program that opens
+  such an object also lets it load one with IFUNC relocations, which musl
+  itself refuses.
 endef
 
 MAKE_FLAGS += \
@@ -67,11 +71,13 @@ define Build/Compile
 	$(if $(GCOMPAT_LSE_OBJ),$(TARGET_CC) $(TARGET_CFLAGS) $(TARGET_CPPFLAGS) \
 		-mno-outline-atomics -fPIC -c -o $(GCOMPAT_LSE_OBJ) ./files/aarch64-lse.c)
 	$(call Build/Compile/Default,libgcompat.so.0)
+	$(call Build/Compile/Default,LDFLAGS="$(TARGET_LDFLAGS)" libgcompat-ifunc.so.0)
 endef
 
 define Package/gcompat/install
 	$(INSTALL_DIR) $(1)/lib
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/libgcompat.so.0 $(1)/lib/
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/libgcompat-ifunc.so.0 $(1)/lib/
 	$(LN) libgcompat.so.0 $(1)/lib/$(GCOMPAT_LDSO)
 endef
 
