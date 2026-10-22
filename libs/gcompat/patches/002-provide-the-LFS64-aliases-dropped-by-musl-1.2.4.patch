@@ -1,19 +1,69 @@
-From 282a4f14616bcf0ae3be3a5fe02a26092d881afb Mon Sep 17 00:00:00 2001
+From ecbf3aebe506aa923ba3eb97df6b5a39b3f34077 Mon Sep 17 00:00:00 2001
 From: Daniel Golle <daniel@makrotopia.org>
 Date: Wed, 16 Sep 2026 01:02:26 +0100
-Subject: [PATCH 2/2] provide the LFS64 aliases dropped by musl 1.2.4
+Subject: [PATCH] provide the LFS64 aliases dropped by musl 1.2.4
 
 musl used to export the _LARGEFILE64_SOURCE aliases as ABI symbols and
 stopped with 1.2.4, so glibc binaries that import them no longer load:
-the Widevine CDM, for one, needs fopen64 and mmap64. Both are plain
-aliases where off_t is already 64 bits wide, so define them here.
+the Widevine CDM needs fopen64 and mmap64, and its newer releases also
+creat64, getrlimit64, open64, pread64, __fxstat64 and __xstat64. off_t,
+rlim_t and struct stat are already 64 bits wide on musl, so each is the
+call without the suffix, as musl's own aliases were.
 
 Signed-off-by: Daniel Golle <daniel@makrotopia.org>
 ---
- libgcompat/stdio.c  | 4 ++++
- libgcompat/unistd.c | 7 +++++++
- 2 files changed, 11 insertions(+)
+ Makefile              |  1 +
+ libgcompat/resource.c |  7 ++++++-
+ libgcompat/stat.c     | 11 +++++++++++
+ libgcompat/stdio.c    |  4 ++++
+ libgcompat/unistd.c   | 33 ++++++++++++++++++++++++++++++++-
+ 5 files changed, 54 insertions(+), 2 deletions(-)
+ create mode 100644 libgcompat/stat.c
 
+--- a/Makefile
++++ b/Makefile
+@@ -27,6 +27,7 @@ LIBGCOMPAT_SRC = \
+ 	libgcompat/setjmp.c		\
+ 	libgcompat/signal.c		\
+ 	libgcompat/socket.c		\
++	libgcompat/stat.c		\
+ 	libgcompat/stdio.c		\
+ 	libgcompat/stdlib.c		\
+ 	libgcompat/string.c		\
+--- a/libgcompat/resource.c
++++ b/libgcompat/resource.c
+@@ -2,7 +2,7 @@
+ #include <dlfcn.h>        /* dlsym, RTLD_NEXT */
+ #include <stdlib.h>       /* NULL */
+ #include <string.h>       /* memcpy */
+-#include <sys/resource.h> /* setrlimit, struct rlimit */
++#include <sys/resource.h> /* getrlimit, setrlimit, struct rlimit */
+ 
+ /* Sigh.
+  * Valve compiled Steam against the glibc2.2 version of setrlimit.
+@@ -35,3 +35,8 @@ int setrlimit(int resource, const struct
+ 	return real_rlimit(resource, &my_rlim);
+ }
+ #endif
++
++int getrlimit64(int resource, struct rlimit *rlim)
++{
++	return getrlimit(resource, rlim);
++}
+--- /dev/null
++++ b/libgcompat/stat.c
+@@ -0,0 +1,11 @@
++#include <sys/stat.h> /* fstat, stat, struct stat */
++
++int __xstat64(int ver, const char *path, struct stat *buf)
++{
++	return stat(path, buf);
++}
++
++int __fxstat64(int ver, int fd, struct stat *buf)
++{
++	return fstat(fd, buf);
++}
 --- a/libgcompat/stdio.c
 +++ b/libgcompat/stdio.c
 @@ -8,6 +8,8 @@
@@ -36,6 +86,14 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
   *
 --- a/libgcompat/unistd.c
 +++ b/libgcompat/unistd.c
+@@ -1,6 +1,6 @@
+ 
+ #include <assert.h> /* assert */
+-#include <fcntl.h>  /* O_CREAT */
++#include <fcntl.h>  /* O_CREAT, O_TMPFILE, creat, open */
+ #include <limits.h> /* NGROUPS_MAX */
+ #include <stddef.h> /* NULL, size_t */
+ #include <unistd.h> /* confstr, getcwd, getgroups, ... */
 @@ -9,6 +9,7 @@
  #include <stdlib.h> /* calloc */
  #include <dlfcn.h>  /* dlsym */
@@ -44,7 +102,7 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
  
  #include "alias.h" /* alias */
  
-@@ -264,3 +265,9 @@ int fcntl64(int fd, int cmd, ...)
+@@ -264,3 +265,33 @@ int fcntl64(int fd, int cmd, ...)
  
  	return fcntl(fd, cmd, arg);
  }
@@ -53,4 +111,28 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
 +             off_t offset)
 +{
 +	return mmap(addr, length, prot, flags, fd, offset);
++}
++
++int open64(const char *path, int oflag, ...)
++{
++	mode_t mode = 0;
++	va_list va;
++
++	if ((oflag & O_CREAT) || (oflag & O_TMPFILE) == O_TMPFILE) {
++		va_start(va, oflag);
++		mode = va_arg(va, mode_t);
++		va_end(va);
++	}
++
++	return open(path, oflag, mode);
++}
++
++int creat64(const char *path, mode_t mode)
++{
++	return creat(path, mode);
++}
++
++ssize_t pread64(int fd, void *buf, size_t count, off_t offset)
++{
++	return pread(fd, buf, count, offset);
 +}
