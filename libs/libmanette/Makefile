@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=libmanette
 PKG_VERSION:=0.2.13
-PKG_RELEASE:=1
+PKG_RELEASE:=2
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.xz
 PKG_SOURCE_URL:=@GNOME/$(PKG_NAME)/$(basename $(PKG_VERSION))
@@ -21,7 +21,7 @@ define Package/libmanette
   CATEGORY:=Libraries
   TITLE:=The simple GObject game controller library.
   URL:=https://gitlab.gnome.org/GNOME/libmanette
-  DEPENDS:=+glib2 +libgudev +hidapi
+  DEPENDS:=+glib2 +libgudev +hidapi +libevdev
 endef
 
 define Package/libmanette/description
