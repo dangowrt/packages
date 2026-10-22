@@ -1,0 +1,587 @@
+From 009138ddc876ab9501b3a7b2883276ede376f417 Mon Sep 17 00:00:00 2001
+From: Daniel Golle <daniel@makrotopia.org>
+Date: Thu, 22 Oct 2026 16:08:10 +0100
+Subject: [PATCH] add libgcompat-ifunc, a dlopen that resolves IFUNC
+
+musl's dynamic linker implements no IFUNC, so a glibc library with
+R_AARCH64_IRELATIVE relocations does not load into a musl program;
+recent Widevine CDMs have four. libgcompat-ifunc.so is preloaded into
+such a program: its dlopen runs each resolver as glibc's loader does,
+with the hwcap arguments the System V ABI for the Arm 64-bit
+Architecture prescribes, from a private mapping of the library, writes
+the results as R_AARCH64_RELATIVE relocations into an in-memory copy of
+it and has musl load that copy. Only resolvers that depend on nothing
+but their arguments can run before relocation; any other result fails
+the copy, and musl then reports the library's relocation itself.
+R_AARCH64_IRELATIVE (1032) is from the ELF for the Arm 64-bit
+Architecture, which musl's elf.h does not define.
+
+It is a library of its own because libgcompat redefines functions musl
+also has, strerror_r among them, which a musl program must not see.
+
+Signed-off-by: Daniel Golle <daniel@makrotopia.org>
+---
+ Makefile       |  19 +-
+ README.rst     |  17 ++
+ ifunc/dlopen.c | 468 +++++++++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 501 insertions(+), 3 deletions(-)
+ create mode 100644 ifunc/dlopen.c
+
+--- a/Makefile
++++ b/Makefile
+@@ -45,6 +45,12 @@ LIBGCOMPAT_SOVERSION = 0
+ LIBGCOMPAT_NAME = libgcompat.so.${LIBGCOMPAT_SOVERSION}
+ LIBGCOMPAT_PATH = /lib/${LIBGCOMPAT_NAME}
+ 
++IFUNC_SRC = \
++	ifunc/dlopen.c
++IFUNC_OBJ = ${IFUNC_SRC:.c=.o}
++IFUNC_NAME = libgcompat-ifunc.so.${LIBGCOMPAT_SOVERSION}
++IFUNC_PATH = /lib/${IFUNC_NAME}
++
+ LOADER_SRC = \
+ 	loader/loader.c
+ LOADER_OBJ = ${LOADER_SRC:.c=.o}
+@@ -70,7 +76,7 @@ OBSTACK_CFLAGS = $(shell ${PKG_CONFIG} -
+ OBSTACK_LIBS   = $(shell ${PKG_CONFIG} --libs ${WITH_OBSTACK})
+ endif
+ 
+-all: ${LIBGCOMPAT_NAME} ${LOADER_NAME}
++all: ${LIBGCOMPAT_NAME} ${IFUNC_NAME} ${LOADER_NAME}
+ 
+ ${LIBGCOMPAT_NAME}: ${LIBGCOMPAT_OBJ}
+ 	${CC} ${CFLAGS} ${LDFLAGS} -shared -Wl,-soname,${LIBGCOMPAT_NAME} \
+@@ -79,6 +85,10 @@ ${LIBGCOMPAT_NAME}: ${LIBGCOMPAT_OBJ}
+ 
+ ${LIBGCOMPAT_OBJ}: ${LIBGCOMPAT_INCLUDE}
+ 
++${IFUNC_NAME}: ${IFUNC_OBJ}
++	${CC} ${CFLAGS} ${LDFLAGS} -shared -Wl,-soname,${IFUNC_NAME} \
++		-o ${IFUNC_NAME} ${IFUNC_OBJ}
++
+ ${LOADER_NAME}: ${LOADER_OBJ}
+ 	${CC} ${CFLAGS} ${LDFLAGS} -static-pie -o ${LOADER_NAME} ${LOADER_OBJ}
+ 
+@@ -91,13 +101,16 @@ ${LOADER_NAME}: ${LOADER_OBJ}
+ 		${LIBUCONTEXT_CFLAGS} ${OBSTACK_CFLAGS} -o $@ $<
+ 
+ clean:
+-	rm -f libgcompat/*.o loader/*.o ${LIBGCOMPAT_NAME} ${LOADER_NAME}
++	rm -f libgcompat/*.o ifunc/*.o loader/*.o ${LIBGCOMPAT_NAME} ${IFUNC_NAME} \
++		${LOADER_NAME}
+ 
+ format:
+-	clang-format -i ${LIBGCOMPAT_INCLUDE} ${LIBGCOMPAT_SRC} ${LOADER_SRC}
++	clang-format -i ${LIBGCOMPAT_INCLUDE} ${LIBGCOMPAT_SRC} ${IFUNC_SRC} \
++		${LOADER_SRC}
+ 
+ install: all
+ 	install -D -m755 ${LIBGCOMPAT_NAME} ${DESTDIR}/${LIBGCOMPAT_PATH}
++	install -D -m755 ${IFUNC_NAME} ${DESTDIR}/${IFUNC_PATH}
+ 	install -D -m755 ${LOADER_NAME} ${DESTDIR}/${LOADER_PATH}
+ 
+ .PHONY: all clean format install
+--- a/README.rst
++++ b/README.rst
+@@ -150,6 +150,11 @@ further customisation:
+   The location in which to install ``libgcompat.so``, relative to ``DESTDIR``.
+   The default value is ``/lib/libgcompat.so.0``.
+ 
++* ``IFUNC_PATH``
++
++  The location in which to install ``libgcompat-ifunc.so``, relative to
++  ``DESTDIR``.  The default value is ``/lib/libgcompat-ifunc.so.0``.
++
+ * ``LOADER_PATH``
+ 
+   The location in which to install the glibc interpreter stub.  The default
+@@ -202,6 +207,18 @@ There are two ways to accomplish this:
+ 
+ * Alternatively, you can link the musl binary against libgcompat.
+ 
++musl does not implement IFUNC, so it refuses a library that carries IRELATIVE
++relocations.  On aarch64, preloading ``libgcompat-ifunc.so`` into the program
++that opens such a library makes it loadable: its dlopen(3) runs the library's
++resolvers as glibc would and has musl load a private copy of the library in
++which their results are ordinary relative relocations.  This works for
++resolvers that depend only on their arguments, which is what the AArch64 IFUNC
++convention passes them.
++
++::
++
++  $ LD_PRELOAD=/lib/libgcompat-ifunc.so.0 ./program
++
+ Environment variables
+ `````````````````````
+ 
+--- /dev/null
++++ b/ifunc/dlopen.c
+@@ -0,0 +1,468 @@
++#define _GNU_SOURCE
++#include <dlfcn.h>    /* RTLD_NEXT, dlsym */
++#include <elf.h>      /* Elf64_*, DT_*, PT_*, PF_*, R_AARCH64_* */
++#include <fcntl.h>    /* O_CLOEXEC, O_RDONLY, open */
++#include <pthread.h>  /* pthread_mutex_*, pthread_once */
++#include <stddef.h>   /* NULL, size_t */
++#include <stdint.h>   /* uintptr_t */
++#include <stdio.h>    /* snprintf */
++#include <stdlib.h>   /* malloc */
++#include <string.h>   /* memcmp, strchr, strrchr */
++#include <sys/auxv.h> /* AT_HWCAP, AT_HWCAP2, getauxval */
++#include <sys/mman.h> /* MFD_CLOEXEC, memfd_create, mmap, munmap */
++#include <sys/stat.h> /* fstat, struct stat */
++#include <unistd.h>   /* close, pwrite, sysconf */
++
++#if defined(__aarch64__)
++
++#ifndef R_AARCH64_IRELATIVE
++#define R_AARCH64_IRELATIVE 1032
++#endif
++
++#define IFUNC_ARG_HWCAP (1ULL << 62)
++
++struct ifunc_arg {
++	unsigned long size;
++	unsigned long hwcap;
++	unsigned long hwcap2;
++};
++
++struct image {
++	const unsigned char *data;
++	size_t size;
++	const Elf64_Phdr *phdr;
++	unsigned int phnum;
++};
++
++struct table {
++	size_t offset;
++	size_t size;
++};
++
++struct fixed {
++	dev_t dev;
++	ino_t ino;
++	int fd;
++	struct fixed *next;
++};
++
++static pthread_mutex_t fixed_lock = PTHREAD_MUTEX_INITIALIZER;
++static struct fixed *fixed_head;
++
++static int image_check(const struct image *img)
++{
++	const Elf64_Ehdr *ehdr = (const void *) img->data;
++
++	if (img->size < sizeof(*ehdr)
++	    || memcmp(ehdr->e_ident, ELFMAG, SELFMAG) != 0) {
++		return -1;
++	}
++	if (ehdr->e_ident[EI_CLASS] != ELFCLASS64
++	    || ehdr->e_machine != EM_AARCH64 || ehdr->e_type != ET_DYN
++	    || ehdr->e_phentsize != sizeof(Elf64_Phdr)) {
++		return -1;
++	}
++	if (ehdr->e_phoff > img->size
++	    || ehdr->e_phnum
++	        > (img->size - ehdr->e_phoff) / sizeof(Elf64_Phdr)) {
++		return -1;
++	}
++
++	return 0;
++}
++
++static const Elf64_Phdr *image_load(const struct image *img, Elf64_Addr vaddr)
++{
++	const Elf64_Phdr *ph;
++	unsigned int i;
++
++	for (i = 0; i < img->phnum; i++) {
++		ph = &img->phdr[i];
++		if (ph->p_type == PT_LOAD && vaddr >= ph->p_vaddr
++		    && vaddr - ph->p_vaddr < ph->p_memsz) {
++			return ph;
++		}
++	}
++
++	return NULL;
++}
++
++static long image_offset(const struct image *img, Elf64_Addr vaddr, size_t size)
++{
++	const Elf64_Phdr *ph = image_load(img, vaddr);
++	Elf64_Addr rel;
++
++	if (ph == NULL) {
++		return -1;
++	}
++	rel = vaddr - ph->p_vaddr;
++	if (rel > ph->p_filesz || size > ph->p_filesz - rel
++	    || ph->p_offset + rel > img->size
++	    || size > img->size - (ph->p_offset + rel)) {
++		return -1;
++	}
++
++	return (long) (ph->p_offset + rel);
++}
++
++static const Elf64_Dyn *image_dynamic(const struct image *img, size_t *count)
++{
++	const Elf64_Phdr *ph;
++	unsigned int i;
++
++	for (i = 0; i < img->phnum; i++) {
++		ph = &img->phdr[i];
++		if (ph->p_type == PT_DYNAMIC && ph->p_offset <= img->size
++		    && ph->p_filesz <= img->size - ph->p_offset) {
++			*count = ph->p_filesz / sizeof(Elf64_Dyn);
++			return (const void *) (img->data + ph->p_offset);
++		}
++	}
++
++	return NULL;
++}
++
++static int image_tables(const struct image *img, struct table tables[2])
++{
++	Elf64_Xword rela = 0, relasz = 0, jmprel = 0, pltrelsz = 0;
++	Elf64_Xword pltrel = DT_RELA;
++	const Elf64_Dyn *dyn;
++	size_t count = 0, i;
++	int n = 0;
++	long off;
++
++	dyn = image_dynamic(img, &count);
++	for (i = 0; dyn != NULL && i < count && dyn[i].d_tag != DT_NULL; i++) {
++		switch (dyn[i].d_tag) {
++		case DT_RELA:
++			rela = dyn[i].d_un.d_ptr;
++			break;
++		case DT_RELASZ:
++			relasz = dyn[i].d_un.d_val;
++			break;
++		case DT_JMPREL:
++			jmprel = dyn[i].d_un.d_ptr;
++			break;
++		case DT_PLTRELSZ:
++			pltrelsz = dyn[i].d_un.d_val;
++			break;
++		case DT_PLTREL:
++			pltrel = dyn[i].d_un.d_val;
++			break;
++		}
++	}
++
++	off = image_offset(img, rela, relasz);
++	if (relasz != 0 && off >= 0) {
++		tables[n].offset = off;
++		tables[n++].size = relasz;
++	}
++	off = image_offset(img, jmprel, pltrelsz);
++	if (pltrelsz != 0 && pltrel == DT_RELA && off >= 0) {
++		tables[n].offset = off;
++		tables[n++].size = pltrelsz;
++	}
++
++	return n;
++}
++
++static size_t image_irelative(const struct image *img,
++                              const struct table *tables, int n)
++{
++	const Elf64_Rela *r;
++	size_t count = 0, i;
++	int t;
++
++	for (t = 0; t < n; t++) {
++		r = (const void *) (img->data + tables[t].offset);
++		for (i = 0; i < tables[t].size / sizeof(*r); i++) {
++			if (ELF64_R_TYPE(r[i].r_info) == R_AARCH64_IRELATIVE) {
++				count++;
++			}
++		}
++	}
++
++	return count;
++}
++
++static unsigned char *image_map(const struct image *img, int fd, size_t *span)
++{
++	size_t page = sysconf(_SC_PAGESIZE);
++	const Elf64_Phdr *ph;
++	unsigned char *base;
++	Elf64_Addr end = 0;
++	unsigned int i;
++	size_t skew;
++	int prot;
++
++	for (i = 0; i < img->phnum; i++) {
++		ph = &img->phdr[i];
++		if (ph->p_type == PT_LOAD && ph->p_vaddr + ph->p_memsz > end) {
++			end = ph->p_vaddr + ph->p_memsz;
++		}
++	}
++	*span = (end + page - 1) & ~(page - 1);
++	/* zeroes stand in for .bss, which a resolver may read */
++	base = mmap(NULL, *span, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
++	if (base == MAP_FAILED) {
++		return NULL;
++	}
++
++	for (i = 0; i < img->phnum; i++) {
++		ph = &img->phdr[i];
++		if (ph->p_type != PT_LOAD || ph->p_filesz == 0) {
++			continue;
++		}
++		prot = (ph->p_flags & PF_X) ? PROT_READ | PROT_EXEC : PROT_READ;
++		skew = ph->p_vaddr & (page - 1);
++		if (mmap(base + ph->p_vaddr - skew, ph->p_filesz + skew, prot,
++		         MAP_PRIVATE | MAP_FIXED, fd, ph->p_offset - skew)
++		    == MAP_FAILED) {
++			munmap(base, *span);
++			return NULL;
++		}
++	}
++
++	return base;
++}
++
++static int image_resolve(const struct image *img, unsigned char *base,
++                         Elf64_Sxword addend, Elf64_Sxword *target)
++{
++	struct ifunc_arg arg = {
++		.size = sizeof(arg),
++		.hwcap = getauxval(AT_HWCAP),
++		.hwcap2 = getauxval(AT_HWCAP2),
++	};
++	uintptr_t (*resolver)(unsigned long, const struct ifunc_arg *);
++	const Elf64_Phdr *ph = image_load(img, addend);
++	uintptr_t result;
++
++	if (ph == NULL || !(ph->p_flags & PF_X)) {
++		return -1;
++	}
++	resolver = (void *) (base + addend);
++	result = resolver(arg.hwcap | IFUNC_ARG_HWCAP, &arg);
++
++	if (result < (uintptr_t) base) {
++		return -1;
++	}
++	ph = image_load(img, result - (uintptr_t) base);
++	if (ph == NULL || !(ph->p_flags & PF_X)) {
++		return -1;
++	}
++	*target = result - (uintptr_t) base;
++
++	return 0;
++}
++
++static int image_write(int memfd, const struct image *img)
++{
++	size_t done = 0;
++	ssize_t ret;
++
++	while (done < img->size) {
++		ret = pwrite(memfd, img->data + done, img->size - done, done);
++		if (ret <= 0) {
++			return -1;
++		}
++		done += ret;
++	}
++
++	return 0;
++}
++
++static int image_fixup_table(int memfd, const struct image *img,
++                             unsigned char *base, const struct table *table)
++{
++	const Elf64_Rela *r = (const void *) (img->data + table->offset);
++	Elf64_Rela fixed;
++	size_t i;
++
++	for (i = 0; i < table->size / sizeof(*r); i++) {
++		if (ELF64_R_TYPE(r[i].r_info) != R_AARCH64_IRELATIVE) {
++			continue;
++		}
++		fixed = r[i];
++		fixed.r_info = ELF64_R_INFO(0, R_AARCH64_RELATIVE);
++		if (image_resolve(img, base, r[i].r_addend, &fixed.r_addend)
++		    != 0) {
++			return -1;
++		}
++		if (pwrite(memfd, &fixed, sizeof(fixed),
++		           table->offset + i * sizeof(fixed))
++		    != sizeof(fixed)) {
++			return -1;
++		}
++	}
++
++	return 0;
++}
++
++static int image_fixup(int memfd, int fd, const struct image *img,
++                       const struct table *tables, int n)
++{
++	unsigned char *base;
++	int t, ret = 0;
++	size_t span;
++
++	base = image_map(img, fd, &span);
++	if (base == NULL) {
++		return -1;
++	}
++	for (t = 0; t < n && ret == 0; t++) {
++		ret = image_fixup_table(memfd, img, base, &tables[t]);
++	}
++	munmap(base, span);
++
++	return ret;
++}
++
++static int image_copy(int fd, const struct image *img, const char *file)
++{
++	struct table tables[2];
++	const char *name;
++	int memfd, n;
++
++	n = image_tables(img, tables);
++	if (image_irelative(img, tables, n) == 0) {
++		return -1;
++	}
++
++	name = strrchr(file, '/');
++	memfd = memfd_create(name != NULL ? name + 1 : file, MFD_CLOEXEC);
++	if (memfd < 0) {
++		return -1;
++	}
++	if (image_write(memfd, img) != 0
++	    || image_fixup(memfd, fd, img, tables, n) != 0) {
++		close(memfd);
++		return -1;
++	}
++
++	return memfd;
++}
++
++static int image_open(int fd, const struct stat *st, const char *file)
++{
++	const Elf64_Ehdr *ehdr;
++	struct image img;
++	void *data;
++	int memfd;
++
++	data = mmap(NULL, st->st_size, PROT_READ, MAP_PRIVATE, fd, 0);
++	if (data == MAP_FAILED) {
++		return -1;
++	}
++	img.data = data;
++	img.size = st->st_size;
++	if (image_check(&img) != 0) {
++		munmap(data, st->st_size);
++		return -1;
++	}
++	ehdr = data;
++	img.phdr = (const void *) (img.data + ehdr->e_phoff);
++	img.phnum = ehdr->e_phnum;
++	memfd = image_copy(fd, &img, file);
++	munmap(data, st->st_size);
++
++	return memfd;
++}
++
++static int fixed_find(const struct stat *st)
++{
++	struct fixed *f;
++
++	for (f = fixed_head; f != NULL; f = f->next) {
++		if (f->dev == st->st_dev && f->ino == st->st_ino) {
++			return f->fd;
++		}
++	}
++
++	return -1;
++}
++
++static int fixed_add(const struct stat *st, int memfd)
++{
++	struct fixed *f = malloc(sizeof(*f));
++
++	if (f == NULL) {
++		return -1;
++	}
++	f->dev = st->st_dev;
++	f->ino = st->st_ino;
++	f->fd = memfd;
++	f->next = fixed_head;
++	fixed_head = f;
++
++	return 0;
++}
++
++/* The copy outlives the call: musl never unloads, and a later dlopen of the
++ * same file must find the copy already loaded rather than map another. */
++static int fixed_get(const char *file)
++{
++	struct stat st;
++	int fd, memfd;
++
++	fd = open(file, O_RDONLY | O_CLOEXEC);
++	if (fd < 0) {
++		return -1;
++	}
++	if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size == 0) {
++		close(fd);
++		return -1;
++	}
++
++	pthread_mutex_lock(&fixed_lock);
++	memfd = fixed_find(&st);
++	if (memfd < 0) {
++		memfd = image_open(fd, &st, file);
++		if (memfd >= 0 && fixed_add(&st, memfd) != 0) {
++			close(memfd);
++			memfd = -1;
++		}
++	}
++	pthread_mutex_unlock(&fixed_lock);
++	close(fd);
++
++	return memfd;
++}
++
++#else
++
++static int fixed_get(const char *file)
++{
++	return -1;
++}
++
++#endif
++
++static void *(*real_dlopen)(const char *, int);
++static pthread_once_t real_dlopen_once = PTHREAD_ONCE_INIT;
++
++static void real_dlopen_init(void)
++{
++	real_dlopen = dlsym(RTLD_NEXT, "dlopen");
++}
++
++void *dlopen(const char *file, int mode)
++{
++	char path[sizeof("/proc/self/fd/") + 3 * sizeof(int)];
++	int memfd;
++
++	pthread_once(&real_dlopen_once, real_dlopen_init);
++
++	/* only a path names the file itself; musl does the searching */
++	if (file == NULL || strchr(file, '/') == NULL) {
++		return real_dlopen(file, mode);
++	}
++
++	memfd = fixed_get(file);
++	if (memfd < 0) {
++		return real_dlopen(file, mode);
++	}
++	snprintf(path, sizeof(path), "/proc/self/fd/%d", memfd);
++
++	return real_dlopen(path, mode);
++}
