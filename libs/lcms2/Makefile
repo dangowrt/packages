@@ -1,26 +1,18 @@
-#
-# Copyright (C) 2025 OpenWrt.org
-#
-# This is free software, licensed under the GNU General Public License v2.
-# See /LICENSE for more information.
-#
-
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=lcms2
-PKG_VERSION:=2.18
+PKG_VERSION:=2.19.1
 PKG_RELEASE:=1
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_URL:=https://github.com/mm2/Little-CMS/releases/download/lcms$(PKG_VERSION)/
-PKG_HASH:=ee67be3566f459362c1ee094fde2c159d33fa0390aa4ed5f5af676f9e5004347
+PKG_HASH:=bfc54f7bab59fbc921012014a8032e4cba4abd46db47d46b76416a8c0b2815c8
 
-PKG_MAINTAINER:=
+PKG_MAINTAINER:=Daniel Golle <daniel@makrotopia.org>
 PKG_LICENSE:=MIT
-PKG_LICENSE_FILES:=COPYING
+PKG_LICENSE_FILES:=LICENSE
 PKG_CPE_ID:=cpe:/a:littlecms:little_cms_color_engine
 
-PKG_FIXUP:=autoreconf
 PKG_INSTALL:=1
 PKG_BUILD_PARALLEL:=1
 
@@ -29,19 +21,20 @@ include $(INCLUDE_DIR)/package.mk
 define Package/liblcms2
   SECTION:=libs
   CATEGORY:=Libraries
-  TITLE:=Little CMS color management library
+  TITLE:=Little CMS colour management library
   URL:=https://www.littlecms.com/
-  DEPENDS:=+libjpeg +libtiff
 endef
 
 define Package/liblcms2/description
-  Little CMS (lcms2) is a small-footprint color management engine, with
-  special focus on accuracy and performance. It uses the International Color
-  Consortium standard (ICC) to perform color management.
+  Little CMS (lcms2) is a small-footprint colour management engine, with
+  special focus on accuracy and performance. It uses the International
+  Color Consortium standard (ICC) to perform colour management.
 endef
 
 CONFIGURE_ARGS += \
 	--disable-static \
+	--without-jpeg \
+	--without-tiff \
 	--without-zlib
 
 define Build/InstallDev
