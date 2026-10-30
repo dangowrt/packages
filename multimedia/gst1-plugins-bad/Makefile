@@ -9,7 +9,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=gst1-plugins-bad
 PKG_VERSION:=1.28.7
-PKG_RELEASE:=7
+PKG_RELEASE:=8
 
 PKG_SOURCE:=gst-plugins-bad-$(PKG_VERSION).tar.xz
 PKG_SOURCE_URL:=https://gstreamer.freedesktop.org/src/gst-plugins-bad/
@@ -177,7 +177,7 @@ MESON_ARGS += \
 	-Dcurl-ssh2=disabled \
 	-Dd3dvideosink=disabled \
 	-Dd3d11=disabled \
-	$(call GST_COND_SELECT,dash) \
+	-Ddash=disabled \
 	-Ddc1394=disabled \
 	-Ddecklink=disabled \
 	-Ddirectfb=disabled \
@@ -333,7 +333,6 @@ $(eval $(call GstBuildLibrary,adaptivedemux,adaptivedemux,app uridownloader,))
 $(eval $(call GstBuildLibrary,basecamerabinsrc,basecamerabinsrc,app,))
 $(eval $(call GstBuildLibrary,codecparsers,codecparsers,,))
 $(eval $(call GstBuildLibrary,codecs,codecs,codecparsers,))
-$(eval $(call GstBuildLibrary,isoff,isoff,,))
 $(eval $(call GstBuildLibrary,mpegts,mpegts,,))
 $(eval $(call GstBuildLibrary,photography,photography,,))
 $(eval $(call GstBuildLibrary,play,play,,))
@@ -440,7 +439,6 @@ $(eval $(call GstBuildPlugin,vmnc,vmnc support,,,))
 $(eval $(call GstBuildPlugin,bluez,bluez support,,,+bluez-libs))
 #$(eval $(call GstBuildPlugin,bz2,bzip2 support,,,+libbz2))
 #$(eval $(call GstBuildPlugin,dataurisrc,dataurisrc support,,,))
-$(eval $(call GstBuildPlugin,dash,DASH demuxer,adaptivedemux isoff uridownloader net pbutils tag,,+libxml2))
 $(eval $(call GstBuildPlugin,dtls,DTLS support,,,+libopenssl))
 $(eval $(call GstBuildPlugin,faad,faad support,audio,,+libfaad2))
 $(eval $(call GstBuildPlugin,fbdevsink,fbdev support,video,,))
