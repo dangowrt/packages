@@ -19,9 +19,9 @@ Signed-off-by: Daniel Golle <daniel@makrotopia.org>
 
 --- a/libavutil/hwcontext_v4l2request.c
 +++ b/libavutil/hwcontext_v4l2request.c
-@@ -34,6 +34,23 @@
- #include "hwcontext_v4l2request_internal.h"
- #include "mem.h"
+@@ -46,6 +46,23 @@
+ #define V4L2_PIX_FMT_YUV420_10_AFBC_16X16_SPLIT v4l2_fourcc('A', 'S', '0', '1')
+ #endif
  
 +/* Raspberry Pi downstream SAND128 pixelformats, absent from mainline */
 +#ifndef V4L2_PIX_FMT_NV12_COL128
